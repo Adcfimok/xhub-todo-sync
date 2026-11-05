@@ -15,12 +15,12 @@
       "file": "dist/com.zhou.todo-relay-2.1.0.zip",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 57707,
       "sha256": "b7490ab6319b94ad398c40659ffb95956b78ef5dff7f571a62f0915794146a41",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/version-archive/com.zhou.todo-relay-2.1.0.zip",
-      "uploadedAt": "2026-11-05T16:46:41.516Z"
+      "target": null,
+      "uploadedAt": null
     },
     {
       "id": "android-apk-2.7.0",
@@ -29,12 +29,12 @@
       "file": "android/todo-link-2.7.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 182937,
       "sha256": "1a1bfd056e1203e9ce317ab12d248cc02a986670e8e13760e3229e536f8cf0c1",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/version-archive/todo-link-2.7.0.apk",
-      "uploadedAt": "2026-11-05T16:46:42.394Z"
+      "target": null,
+      "uploadedAt": null
     },
     {
       "id": "android-apk-2.8.0",
@@ -43,19 +43,19 @@
       "file": "android/todo-link-2.8.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 187105,
       "sha256": "8dfa35ab192f7996953696fabc7e36100954614321002673e0ed78cad3efcd22",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/version-archive/todo-link-2.8.0.apk",
-      "uploadedAt": "2026-11-05T16:46:43.570Z"
+      "target": null,
+      "uploadedAt": null
     }
   ],
   "counts": {
     "total": 3,
-    "success": 3,
+    "success": 0,
     "failed": 0,
-    "skipped": 0,
+    "skipped": 3,
     "unprocessed": 0
   },
   "failure": null,
@@ -63,6 +63,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-05T16:46:38.672Z",
-  "finishedAt": "2026-11-05T16:46:43.571Z"
+  "startedAt": "2026-11-05T16:53:04.678Z",
+  "finishedAt": "2026-11-05T16:53:05.179Z"
 }
