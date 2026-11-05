@@ -1,0 +1,33 @@
+{
+  "package": "Adcfimok/xhub-todo-sync/releases",
+  "adapter": "local",
+  "local": {
+    "dir": "_tools/release-upload/outbox"
+  },
+  "github": {
+    "owner": "Adcfimok",
+    "repo": "xhub-todo-sync",
+    "releaseTag": "version-archive",
+    "releaseName": "x-hub 待办同步 · 历史版本产物"
+  },
+  "versions": [
+    {
+      "id": "xhub-ext-2.1.0",
+      "version": "2.1.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-2.1.0.zip"
+    },
+    {
+      "id": "android-apk-2.7.0",
+      "version": "2.7.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.7.0.apk"
+    },
+    {
+      "id": "android-apk-2.8.0",
+      "version": "2.8.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.8.0.apk"
+    }
+  ]
+}
