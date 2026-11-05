@@ -1,0 +1,68 @@
+{
+  "package": "Adcfimok/xhub-todo-sync/releases/version-archive",
+  "adapter": "github-releases(dry-run)",
+  "orderSource": "version-asc",
+  "actualOrder": [
+    "xhub-ext-2.1.0",
+    "android-apk-2.7.0",
+    "android-apk-2.8.0"
+  ],
+  "results": [
+    {
+      "id": "xhub-ext-2.1.0",
+      "version": "2.1.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-2.1.0.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": "预演模式：产物与校验和已校验，未写入目标软件包",
+      "bytes": 57707,
+      "sha256": "b7490ab6319b94ad398c40659ffb95956b78ef5dff7f571a62f0915794146a41",
+      "target": null,
+      "uploadedAt": null
+    },
+    {
+      "id": "android-apk-2.7.0",
+      "version": "2.7.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.7.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": "预演模式：产物与校验和已校验，未写入目标软件包",
+      "bytes": 182937,
+      "sha256": "1a1bfd056e1203e9ce317ab12d248cc02a986670e8e13760e3229e536f8cf0c1",
+      "target": null,
+      "uploadedAt": null
+    },
+    {
+      "id": "android-apk-2.8.0",
+      "version": "2.8.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.8.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": "预演模式：产物与校验和已校验，未写入目标软件包",
+      "bytes": 187105,
+      "sha256": "8dfa35ab192f7996953696fabc7e36100954614321002673e0ed78cad3efcd22",
+      "target": null,
+      "uploadedAt": null
+    }
+  ],
+  "counts": {
+    "total": 3,
+    "success": 3,
+    "failed": 0,
+    "skipped": 0,
+    "unprocessed": 0
+  },
+  "failure": null,
+  "integrity": {
+    "allAccounted": true,
+    "uniqueIds": true
+  },
+  "startedAt": "2026-11-05T16:45:23.100Z",
+  "finishedAt": "2026-11-05T16:45:23.111Z"
+}

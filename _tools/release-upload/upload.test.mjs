@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseVersion, compareVersion, buildPlan, discoverArtifacts, executePlan, summarize } from './lib.mjs';
+import { createAdapter } from './adapters.mjs';
 
 function memoryAdapter({ failOn = null, preset = [] } = {}) {
   const store = new Set(preset);
@@ -215,4 +216,116 @@ test('预演模式不调用适配器写入，且仍记录成功状态', async (t
   assert.equal(uploads, 0);
   assert.equal(summary.counts.success, 1);
   assert.match(summary.results[0].reason, /预演/);
+});
+
+// ---- GitHub Releases 适配器（注入假 fetch，不联网）----
+
+function releasesConfig(extra = {}) {
+  return {
+    package: 'unit/releases',
+    adapter: 'github-releases',
+    github: { owner: 'unit', repo: 'repo', releaseTag: 'version-archive', token: 'unit-token', ...extra },
+  };
+}
+
+function fakeReleasesFetch(state) {
+  return async (url, init = {}) => {
+    const method = init.method ?? 'GET';
+    state.calls.push(`${method} ${url}`);
+    if (url.includes('/releases/tags/')) {
+      if (!state.releaseCreated) {
+        return { status: 404, ok: false, async text() { return 'not found'; } };
+      }
+      return { status: 200, ok: true, async json() { return { id: 7, assets: state.assets }; } };
+    }
+    if (url.endsWith('/releases') && method === 'POST') {
+      state.releaseCreated = true;
+      return { status: 201, ok: true, async json() { return { id: 7, assets: [] }; } };
+    }
+    if (url.includes('uploads.github.com')) {
+      if (state.failUpload) {
+        return { status: 503, ok: false, async text() { return 'release asset service unavailable'; } };
+      }
+      const name = new URL(url).searchParams.get('name');
+      state.assets.push({ name });
+      return {
+        status: 201,
+        ok: true,
+        async json() { return { browser_download_url: `https://github.com/unit/repo/releases/download/version-archive/${name}` }; },
+      };
+    }
+    throw new Error(`意外的请求：${method} ${url}`);
+  };
+}
+
+test('Releases 目标缺少访问令牌时直接报错，不静默降级', () => {
+  const cfg = releasesConfig({ token: undefined });
+  const saved = process.env.GITHUB_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  try {
+    assert.throws(() => createAdapter(cfg), /GITHUB_TOKEN/);
+  } finally {
+    if (saved !== undefined) process.env.GITHUB_TOKEN = saved;
+  }
+});
+
+test('Releases 目标：Release 不存在时先创建，再按版本顺序上传三个资产', async (t) => {
+  const root = await tempRoot(t);
+  const list = entries('ext-2-1-0', 'apk-2-7-0', 'apk-2-8-0');
+  for (const e of list) await fs.writeFile(path.join(root, e.file), e.id);
+  const state = { releaseCreated: false, assets: [], calls: [], failUpload: false };
+  const adapter = createAdapter(releasesConfig(), { fetchImpl: fakeReleasesFetch(state) });
+  const { queue, orderSource } = buildPlan(list);
+  const summary = await executePlan({
+    queue,
+    adapter,
+    options: { root, package: 'unit/releases', orderSource },
+  });
+  assert.equal(summary.adapter, 'github-releases');
+  assert.equal(summary.counts.success, 3);
+  assert.equal(summary.counts.failed, 0);
+  assert.equal(state.releaseCreated, true);
+  assert.equal(state.assets.length, 3);
+  assert.equal(state.calls.filter((c) => c.includes('uploads.github.com')).length, 3);
+  assert.ok(summary.results.every((r) => r.target?.includes('releases/download/')));
+});
+
+test('Releases 目标：同名资产已存在时幂等跳过，不重复上传', async (t) => {
+  const root = await tempRoot(t);
+  const list = entries('ext-2-1-0', 'apk-2-8-0');
+  for (const e of list) await fs.writeFile(path.join(root, e.file), e.id);
+  const state = {
+    releaseCreated: true,
+    assets: [{ name: 'ext-2-1-0.bin' }],
+    calls: [],
+    failUpload: false,
+  };
+  const adapter = createAdapter(releasesConfig(), { fetchImpl: fakeReleasesFetch(state) });
+  const { queue } = buildPlan(list);
+  const summary = await executePlan({ queue, adapter, options: { root, package: 'unit/releases' } });
+  assert.equal(summary.results[0].status, 'skipped');
+  assert.equal(summary.results[1].status, 'success');
+  assert.equal(state.calls.filter((c) => c.includes('uploads.github.com')).length, 1);
+  assert.deepEqual(summary.counts, { total: 2, success: 1, failed: 0, skipped: 1, unprocessed: 0 });
+});
+
+test('Releases 目标：上传接口报错时失败即停，原因与未处理项完整', async (t) => {
+  const root = await tempRoot(t);
+  const list = entries('ext-2-1-0', 'apk-2-7-0', 'apk-2-8-0');
+  for (const e of list) await fs.writeFile(path.join(root, e.file), e.id);
+  const state = { releaseCreated: true, assets: [], calls: [], failUpload: true };
+  const adapter = createAdapter(releasesConfig(), { fetchImpl: fakeReleasesFetch(state) });
+  const { queue } = buildPlan(list);
+  const summary = await executePlan({ queue, adapter, options: { root, package: 'unit/releases' } });
+  assert.equal(summary.failure.id, 'ext-2-1-0');
+  assert.match(summary.failure.reason, /HTTP 503/);
+  assert.deepEqual(summary.counts, { total: 3, success: 0, failed: 1, skipped: 0, unprocessed: 2 });
+  assert.equal(summary.integrity.allAccounted, true);
+});
+
+test('Releases 目标支持按版本建 Release 的模板标签', () => {
+  const cfg = releasesConfig({ releaseTag: 'v{version}-{kind}' });
+  const state = { releaseCreated: false, assets: [], calls: [], failUpload: false };
+  const adapter = createAdapter(cfg, { fetchImpl: fakeReleasesFetch(state) });
+  assert.match(adapter.describe().tagTemplate, /\{version\}/);
 });

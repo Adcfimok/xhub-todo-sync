@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 // 按版本顺序把已存在的产物上传到指定软件包。
 //
-// 用法（在项目根目录执行）：
-//   node _tools/release-upload/upload.mjs
-//   node _tools/release-upload/upload.mjs --dry-run
-//   node _tools/release-upload/upload.mjs --discover --out _tools/release-upload/last-summary.json
+// 用法（在项目根目录执行，默认上传到 GitHub Releases，需要 GITHUB_TOKEN）：
+//   GITHUB_TOKEN=xxx node _tools/release-upload/upload.mjs
+//   node _tools/release-upload/upload.mjs --dry-run                  # 只校验顺序与产物
+//   node _tools/release-upload/upload.mjs --discover --out last-summary.json
 //   node _tools/release-upload/upload.mjs --manifest versions.ordered.json
-//   node _tools/release-upload/upload.mjs --adapter github-releases   # 需 GITHUB_TOKEN
+//   node _tools/release-upload/upload.mjs --adapter local           # 离线写入本地目录
 //
 // 参数：
 //   --manifest <path>   版本清单（默认同目录 versions.json）
 //   --package <name>    覆盖目标软件包标识
-//   --adapter <name>    覆盖适配器：local | github-releases
+//   --adapter <name>    覆盖适配器：github-releases（默认） | local
 //   --dir <path>        覆盖 local 适配器的目标目录
 //   --root <path>       产物相对路径的根目录（默认由清单位置推导项目根）
 //   --discover          扫描实际存在的 zip / apk 补入清单，避免遗漏
@@ -64,6 +64,11 @@ async function main() {
   if (values.package) cfg.package = values.package;
   if (values.adapter) cfg.adapter = values.adapter;
   if (values.dir) cfg.local = { ...(cfg.local ?? {}), dir: values.dir };
+  // GitHub Actions 等托管环境会提供仓库全名，优先于清单里写死的 owner/repo
+  if (process.env.GITHUB_REPOSITORY && cfg.github) {
+    const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+    if (owner && repo) cfg.github = { ...cfg.github, owner, repo };
+  }
 
   const root = path.resolve(values.root ?? path.resolve(path.dirname(manifestPath), '..', '..'));
   // 自动发现只补入清单里没有的「版本 + 类型」，清单已列出的产物不重复登记
@@ -72,7 +77,21 @@ async function main() {
     ? (await discoverArtifacts(root)).filter((e) => !knownKeys.has(entryKey(e)))
     : [];
   const plan = buildPlan(cfg.versions ?? [], { discovered });
-  const adapter = createAdapter(cfg);
+  // 目标软件包不可用时也输出结构化汇总：首个版本记为失败，其余记为未处理，原因原样上报
+  let adapter;
+  try {
+    adapter = createAdapter(cfg);
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    adapter = {
+      name: flags.has('dry-run') ? `${cfg.adapter}(dry-run)` : `${cfg.adapter}(unavailable)`,
+      async exists() { return false; },
+      async upload() { throw new Error(message); },
+    };
+    if (!flags.has('quiet')) {
+      console.error(`[配置] ${message}${flags.has('dry-run') ? '（预演不接触目标，忽略）' : ''}`);
+    }
+  }
 
   if (!flags.has('quiet')) {
     console.error(`目标软件包：${cfg.package}（${adapter.name}）`);

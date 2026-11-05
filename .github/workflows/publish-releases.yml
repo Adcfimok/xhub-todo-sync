@@ -1,0 +1,70 @@
+name: 同步版本产物到 Releases
+
+# 版本产物或上传器变更时，按版本顺序把已存在的扩展包与安装包上传到 GitHub Releases。
+# 使用平台自带的 GITHUB_TOKEN，无需在本机保存任何访问令牌。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dist/*.zip'
+      - 'android/*.apk'
+      - '_tools/release-upload/**'
+      - '.github/workflows/publish-releases.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 单测
+        run: node --test _tools/release-upload/upload.test.mjs
+
+      - name: 按版本顺序上传到 Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node _tools/release-upload/upload.mjs --discover --out release-summary.json
+
+      - name: 输出结构化汇总
+        if: always()
+        run: |
+          if [ -f release-summary.json ]; then
+            cat release-summary.json
+            cat release-summary.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '未生成汇总文件' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 保存汇总为构建产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-upload-summary
+          path: release-summary.json
+          if-no-files-found: warn
+
+      # 回写路径不在上方 paths 触发列表内，避免自触发循环；本地 git pull 即可读到真实结果
+      - name: 回写结构化汇总到仓库
+        if: always()
+        run: |
+          if [ -f release-summary.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            mkdir -p release-results
+            cp release-summary.json release-results/latest.json
+            git add release-results/latest.json
+            if ! git diff --quiet --cached; then
+              git commit -m "chore(release): 回写 Releases 上传汇总"
+              git push origin HEAD:main
+            fi
+          fi

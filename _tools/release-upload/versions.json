@@ -1,6 +1,6 @@
 {
-  "package": "Adcfimok/xhub-todo-sync/releases",
-  "adapter": "local",
+  "package": "Adcfimok/xhub-todo-sync/releases/version-archive",
+  "adapter": "github-releases",
   "local": {
     "dir": "_tools/release-upload/outbox"
   },
