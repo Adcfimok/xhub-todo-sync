@@ -1,0 +1,1029 @@
+/* 设置页样式（原 SettingsView.vue 的 scoped 样式区整块外移）
+ *
+ * 为什么外移：设置页按大类拆成 7 个面板组件，而 scoped 样式不跨组件 ——
+ * 通用设置样式（.setting-row / .toggle / …）在每个面板里各抄一份 = 7 份维护地狱。
+ *
+ * 为什么不直接当全局样式：其中 .toggle / .toggle-knob 在 AboutSection、
+ * ExtensionSettingsDialog 里也各自 scoped 定义过，直接全局会改掉那两处的开关外观。
+ * 所以每条规则统一加 `.settings-view` 前缀 —— 面板是 SettingsView 的子组件，
+ * DOM 上都在这个根类之内，命中不受影响。
+ *
+ * 例外（留在组件自己的 scoped 样式里，靠 data-v 属性命中而不是 DOM 位置）：
+ *   - Teleport 到 body 的迁移数据弹窗：.data-move-card / .dm-* / .mask-*
+ *   - 需要 :deep() 穿透的规则：.quote-source
+ *
+ * ⚠️ 新增设置页样式请按同样口径：要么写进本文件并带 .settings-view 前缀，
+ *    要么确认它在 Teleport 内容里（那种情况写进对应面板的 <style scoped>）。
+ */
+.settings-view{
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow: hidden;
+}
+.settings-view .sv-header{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.settings-view .sv-title{
+  flex: 1;
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-1);
+}
+/* 双栏主体 */
+.settings-view .sv-body{
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-4);
+  overflow: hidden;
+}
+/* 左侧分类导航：两级（大类 + 当前大类的子项缩进展开） */
+.settings-view .sv-nav{
+  flex-shrink: 0;
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.settings-view .sv-nav-item{
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out;
+}
+/* 悬停用中性浅底，不与「选中」共用品牌色 —— 共用时移开鼠标前分不清哪一行才是当前位置 */
+.settings-view .sv-nav-item:hover{
+  background: var(--bg-card-soft);
+  color: var(--text-1);
+}
+/* 选中：全页唯一的实心品牌色块，只给「当前位置」那一行（子项）。
+   大类不再吃这条规则（见下方 .sv-nav-group.active）——两层同色块上下叠，
+   用户会读成「大小类都选中」，既难区分也显得脏。 */
+.settings-view .sv-nav-item.active{
+  background: var(--brand-50);
+  color: var(--brand-500);
+}
+.settings-view .sv-nav-item:focus-visible{
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* 大类 = 章节头：图标 + 名称，字重最重。
+   「激活」只表示这一组正展开，表达方式是「图标着色 + 三角翻转 + 文字加重」，
+   不用背景色 —— 层级与状态各占一种视觉手段，互不抢占。 */
+.settings-view .sv-nav-group{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-1);
+}
+.settings-view .sv-nav-group svg{
+  flex-shrink: 0;
+}
+.settings-view .sv-nav-group:hover{
+  background: var(--bg-card-soft);
+  color: var(--text-1);
+}
+.settings-view .sv-nav-group.active{
+  background: transparent;
+  color: var(--text-1);
+  font-weight: 700;
+}
+/* 展开中的大类：图标与三角用品牌色，位置信息不靠背景传递 */
+.settings-view .sv-nav-group.active > svg:first-child{
+  color: var(--brand-500);
+}
+/* 展开指示三角：收拢朝右，展开转 90° */
+.settings-view .sv-nav-caret{
+  margin-left: auto;
+  color: var(--text-3);
+  transition: transform 150ms ease-out, color 150ms ease-out;
+}
+.settings-view .sv-nav-group.active .sv-nav-caret{
+  transform: rotate(90deg);
+  color: var(--brand-500);
+}
+/* 子项列表：整体缩进到与大类图标中线对齐，层级靠缩进 + 字号/字重表达 */
+.settings-view .sv-nav-kids{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 19px;
+}
+/* 子项：字号轻一档、字重轻一档；缩进让「选中色块」从引导线起算 */
+.settings-view .sv-nav-sub{
+  padding: 6px 12px 6px 11px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.settings-view .sv-nav-sub.active{
+  font-weight: 600;
+  color: var(--brand-500);
+}
+/* 设置项搜索：索引在构建期从模板生成（见 scripts/gen-settings-index.mjs） */
+.settings-view .sv-search{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-soft);
+  color: var(--text-3);
+}
+.settings-view .sv-search:focus-within{
+  border-color: var(--brand-500);
+  color: var(--brand-500);
+}
+.settings-view .sv-search-input{
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 0.75rem;
+}
+.settings-view .sv-search-input::placeholder{
+  color: var(--text-3);
+}
+.settings-view .sv-search-clear{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.settings-view .sv-search-clear:hover{
+  color: var(--text-1);
+}
+/* 搜索结果：设置项名 + 它所在的大类/分区 */
+.settings-view .sv-nav-hit{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+/* 结果列表没有「选中态」要区分，保留品牌浅底悬停（导航行才需要中性 hover） */
+.settings-view .sv-nav-hit:hover{
+  background: var(--brand-50);
+  color: var(--brand-500);
+}
+.settings-view .sv-hit-title{
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.settings-view .sv-nav-hit:hover .sv-hit-title{
+  color: var(--brand-500);
+}
+.settings-view .sv-hit-where{
+  font-size: 0.66rem;
+  color: var(--text-3);
+}
+.settings-view .sv-hit-empty{
+  margin: 4px 8px;
+  font-size: 0.7rem;
+  color: var(--text-3);
+}
+/* 从搜索跳过去时给目标行一次短暂高亮，让眼睛跟得上 */
+.settings-view .setting-flash{
+  border-radius: var(--radius-sm);
+  animation: setting-flash 1.6s ease-out;
+}
+
+@keyframes setting-flash {
+  0% {
+    background: var(--brand-50);
+  }
+  70% {
+    background: var(--brand-50);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+
+/* 右侧内容面板：全量渲染单列，内容放开全宽 */
+.settings-view .sv-content {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-6);
+  background: var(--frost-surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.settings-view .sv-sec{
+  padding-bottom: var(--space-5);
+}
+.settings-view .sv-sec + .sv-sec{
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-5);
+  margin-top: var(--space-5);
+}
+/* 分类标题：品牌色短竖条 + 加粗大字，与下方设置项明确分层 */
+.settings-view .sv-sec-title{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--space-4);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-1);
+}
+/* 与上一节拉开更大间距的分区标题（如「速记维护」跟在导入导出之后） */
+.settings-view .sv-sec-title.gap-above{
+  margin-top: 28px;
+}
+.settings-view .sv-sec-title::before{
+  content: '';
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--brand-500);
+  flex-shrink: 0;
+}
+/* 分类内的小组标题（如剪贴板「保留策略 / 记录行为 / 操作」） */
+.settings-view .sv-subtitle{
+  margin: 16px 0 2px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.settings-view .sv-subtitle:first-of-type{
+  margin-top: 0;
+}
+.settings-view .setting-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+.settings-view .setting-row + .setting-row{
+  border-top: 1px solid var(--border-soft);
+}
+.settings-view .setting-info{
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-view .setting-desc{
+  flex-basis: 100%;
+}
+.settings-view .setting-name{
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.settings-view .setting-desc{
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+.settings-view .autostart-warn{
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--c-red-ink, #d03050);
+}
+.settings-view .autostart-repair{
+  padding: 2px 10px;
+  font-size: 0.72rem;
+  color: var(--text-1);
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-view .autostart-repair:hover:not(:disabled){
+  background: var(--bg-active, rgba(127, 127, 127, 0.2));
+}
+.settings-view .autostart-repair:disabled{
+  opacity: 0.6;
+  cursor: default;
+}
+/* 悬浮球环形按钮配置：已选 chips + 可添加 chips */
+.settings-view .fb-btn-row{
+  align-items: flex-start;
+}
+.settings-view .fb-btn-cfg{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+}
+.settings-view .fb-btn-list,
+.settings-view .fb-btn-add{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.settings-view .fb-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft, rgba(91, 91, 245, 0.12));
+  color: var(--text-1);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.settings-view .fb-chip-btn{
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-view .fb-chip-btn:hover:not(:disabled){
+  background: rgba(120, 120, 160, 0.15);
+  color: var(--text-1);
+}
+.settings-view .fb-chip-btn:disabled{
+  opacity: 0.35;
+  cursor: default;
+}
+.settings-view .fb-chip-remove{
+  color: var(--danger, #d64550);
+}
+.settings-view .fb-chip-empty{
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+.settings-view .fb-chip-add{
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-view .fb-chip-add:hover:not(:disabled){
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.settings-view .fb-chip-add:disabled{
+  opacity: 0.4;
+  cursor: default;
+}
+/* 开关 */
+.settings-view .toggle{
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.18s;
+}
+.settings-view .toggle.on{
+  background: var(--brand-500);
+}
+.settings-view .toggle-knob{
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-dock);
+  transition: transform 0.18s;
+}
+.settings-view .toggle.on .toggle-knob{
+  transform: translateX(18px);
+}
+.settings-view .data-btn{
+  padding: 7px 14px;
+}
+.settings-view .data-btn.confirm{
+  background: var(--c-red);
+  color: var(--text-on-accent);
+}
+.settings-view .data-btn.confirm:hover{
+  background: color-mix(in srgb, var(--c-red) 85%, #000);
+  color: var(--text-on-accent);
+}
+.settings-view .shortcut-row{
+  align-items: flex-start;
+}
+.settings-view .opacity-edit{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  flex-shrink: 0;
+}
+.settings-view .opacity-slider{
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--brand-500);
+  cursor: pointer;
+}
+.settings-view .opacity-value{
+  min-width: 40px;
+  text-align: right;
+  font-size: 0.78125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.settings-view .font-group{
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-view .font-group-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+.settings-view .font-group-title{
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.settings-view .font-group-chevron{
+  color: var(--text-3);
+  transition: transform 0.18s ease-out;
+}
+.settings-view .font-group-chevron.open{
+  transform: rotate(180deg);
+}
+.settings-view .font-group-body{
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-view .font-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.settings-view .font-label{
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-1);
+  flex-shrink: 0;
+}
+.settings-view .font-edit{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+  flex-shrink: 0;
+}
+.settings-view .chat-panel-side{
+  min-width: 200px;
+}
+/* 独立窗口形态下内嵌面板专属项禁用（下拉触发器经 $attrs 同时收到 disabled 与该 class） */
+.settings-view .chat-panel-side:disabled{
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-view .opacity-slider:disabled{
+  opacity: 0.45;
+  cursor: default;
+}
+.settings-view .quote-edit{
+  min-width: 240px;
+  flex-shrink: 0;
+}
+.settings-view .weather-edit{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 340px;
+  flex-shrink: 0;
+}
+.settings-view .weather-edit .field-input{
+  flex: 1;
+  min-width: 0;
+}
+.settings-view .num-edit{
+  min-width: 120px;
+  flex-shrink: 0;
+}
+.settings-view .num-input{
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  color: var(--text-1);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  padding: 8px 10px;
+  outline: none;
+}
+.settings-view .num-input:focus{
+  border-color: var(--brand-500);
+  box-shadow: var(--shadow-focus);
+}
+/* 带单位的数值输入（如「通知驻留时长」的「秒」）：排成一行，输入框吃掉剩余宽度 */
+.settings-view .num-edit.with-unit{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-view .num-edit.with-unit .num-input{
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.settings-view .num-unit{
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+.settings-view .data-btn.danger{
+  color: var(--c-red-ink);
+  border-color: color-mix(in srgb, var(--c-red) 35%, transparent);
+}
+.settings-view .data-btn.danger:hover{
+  background: var(--c-red-soft);
+  border-color: transparent;
+}
+.settings-view .shortcut-edit{
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* 禁用态（该快捷键已关）：输入框整体压暗，明确「保留但不生效」 */
+.settings-view .shortcut-edit.off .shortcut-input-wrap{
+  opacity: 0.45;
+  pointer-events: none;
+}
+.settings-view .shortcut-toggle{
+  flex-shrink: 0;
+}
+.settings-view .shortcut-input-wrap{
+  width: 100%;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+.settings-view .shortcut-icon{
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-4);
+}
+.settings-view .shortcut-input{
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--input-bg);
+  color: var(--text-1);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  padding: 9px 84px 9px 32px;
+  outline: none;
+}
+.settings-view .shortcut-input:focus{
+  border-color: var(--brand-500);
+  box-shadow: var(--shadow-focus);
+}
+.settings-view .shortcut-record-btn{
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--brand-50);
+  color: var(--brand-500);
+  font-size: 0.75rem;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.settings-view .shortcut-record-btn:disabled{
+  opacity: 0.9;
+}
+.settings-view .shortcut-record-btn:hover{
+  background: color-mix(in srgb, var(--brand-500) 14%, transparent);
+}
+.settings-view .shortcut-error{
+  margin-top: -8px;
+  font-size: 0.75rem;
+  color: var(--c-red);
+}
+.settings-view .settings-foot{
+  margin-top: 16px;
+  font-size: 0.75rem;
+  color: var(--text-3);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.settings-view .settings-lock{
+  flex-shrink: 0;
+}
+/* ---- 本机源码目录直挂（开发扩展的目录路径 / Skills 目标路径） ---- */
+.settings-view .dev-dir-path{
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+  /* 路径是要被读、被核对、被复制的东西，不能是灰字（原来没设颜色 → 继承到灰阶，看不清）：
+     用主文本色，暗色主题下就是白色 */
+  color: var(--text-1);
+}
+.settings-view .dev-dir-warn{
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--c-orange-ink);
+}
+/* ---- 账号 ---- */
+.settings-view .account-intro{
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+/* 登录反馈行：busy 用灰字（服务端要代调 GitHub，等 10s 上下是常态，不该像报错一样刺眼），
+   失败用红字并**常驻**到下一次操作 —— toast 只有 2.2s，用户没看见就等于「点了没反应」 */
+.settings-view .account-notice{
+  margin: -8px 0 8px;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+.settings-view .account-notice.error{
+  color: var(--c-red-ink);
+}
+/* 需要用户自己动手、但不算失败的提示（如没能自动打开浏览器） */
+.settings-view .account-notice.warn{
+  color: var(--c-orange-ink);
+}
+.settings-view .account-inline{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.settings-view .account-inline-end{
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.settings-view .account-input{
+  width: 190px;
+  padding: 5px 8px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-card-soft);
+  color: var(--text-1);
+}
+.settings-view .account-input-sm{
+  width: 110px;
+  font-family: ui-monospace, Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+.settings-view .account-device{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+.settings-view .account-code{
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.12em;
+  color: var(--brand-500);
+}
+/* 验证码复制钮：与码同高、不抢视觉（复制后直接粘到浏览器里） */
+.settings-view .account-copy{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-card-soft);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.settings-view .account-copy:hover{
+  color: var(--brand-500);
+  border-color: var(--brand-500);
+}
+.settings-view .account-copy:active{
+  transform: scale(0.96);
+}
+.settings-view .account-apply{
+  margin: 6px 0 4px;
+}
+.settings-view .account-textarea{
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-card-soft);
+  color: var(--text-1);
+  resize: vertical;
+}
+.settings-view .account-device-empty{
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  color: var(--text-3);
+}
+.settings-view .account-device-item{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-soft);
+  font-size: 0.74rem;
+}
+.settings-view .account-device-name{
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1);
+}
+.settings-view .account-device-meta{
+  color: var(--text-3);
+  font-size: 0.7rem;
+}
+/* 「本机」标记：这行是当前正在用的设备，不提供撤销（撤销 = 把自己踢下线） */
+.settings-view .account-device-self{
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-50);
+  color: var(--brand-500);
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+/* ---- 主题设置 ---- */
+.settings-view .theme-group{
+  padding: 4px 0 8px;
+}
+/* 每行：左侧标签 + 右侧控件两端对齐 */
+.settings-view .theme-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+}
+.settings-view .theme-row + .theme-row{
+  border-top: 1px solid var(--border-soft);
+}
+.settings-view .theme-label{
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+/* 整块内容（如色卡）：标签在上方，内容左对齐铺开 */
+.settings-view .theme-row-stack{
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+/* 色卡分组小标签（单色/渐变）：占满整行，换行显示 */
+.settings-view .theme-sublabel{
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.settings-view .theme-sublabel + button{
+  margin-top: -2px;
+}
+/* 明暗模式分段选择 */
+.settings-view .theme-mode-seg{
+  display: inline-flex;
+  gap: 6px;
+  background: var(--bg-card-soft);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+}
+.settings-view .theme-mode-seg button{
+  padding: 5px 14px;
+  border-radius: inherit;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.settings-view .theme-mode-seg button.on{
+  background: var(--brand-500);
+  color: var(--text-on-accent);
+}
+/* 主题配色色卡：固定尺寸保证长宽一致，支持换行 */
+.settings-view .theme-presets{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-view .theme-presets button{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 64px;
+  height: 64px;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-card-solid);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.settings-view .theme-presets button.on{
+  border-color: var(--brand-500);
+  box-shadow: var(--shadow-focus);
+}
+.settings-view .preset-swatch{
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+.settings-view .preset-name{
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+.settings-view .theme-presets button.on .preset-name{
+  color: var(--text-1);
+}
+/* 强调色 */
+.settings-view .theme-accent{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-view .accent-dots{
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-view .accent-dots button{
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+.settings-view .accent-dots button:hover{
+  transform: scale(1.1);
+}
+.settings-view .accent-dots button.on{
+  box-shadow: 0 0 0 2px var(--bg-card-solid), 0 0 0 4px var(--brand-500);
+}
+.settings-view .accent-custom{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-view .accent-custom input[type='color']{
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 2px;
+  cursor: pointer;
+}
+.settings-view .accent-reset{
+  padding: 4px 10px;
+  font-size: 0.75rem;
+}
+/* ---- 应用壁纸 ---- */
+.settings-view .wallpaper-box{
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.settings-view .wallpaper-preview{
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--input-bg);
+}
+.settings-view .wallpaper-preview.empty{
+  border-style: dashed;
+}
+.settings-view .wallpaper-preview img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.settings-view .wallpaper-empty{
+  font-size: 0.75rem;
+  color: var(--text-3);
+}
+.settings-view .wallpaper-actions{
+  display: flex;
+  gap: var(--space-2);
+}
+/* 内嵌模糊开关行：去掉 setting-row 的默认外间距，贴进壁纸分组 */
+.settings-view .wallpaper-blur-row{
+  margin: 0;
+  padding: 0;
+}
+/* ---- 数据存储路径 ---- */
+.settings-view .data-path{
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+/* 速记 · AI 深度整理模型：来源 + 模型两级下拉（行内右对齐竖排） */
+.settings-view .notes-ai-model{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.settings-view .notes-ai-hint{
+  max-width: 240px;
+  text-align: right;
+  font-size: 0.6875rem;
+  color: var(--text-4);
+}
+
+/* GIF 录制：保存目录操作钮组 */
+.settings-view .gif-dir-actions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 更改数据存储路径弹窗 */

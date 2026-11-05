@@ -1,0 +1,1987 @@
+//! 扩展系统：manifest 解析 + 本地目录扫描注册表（spec §12 第 1 步）。
+//!
+//! 第 1 步只做「扫描 + 解析 + 列出」，不涉及安装 / 卸载 / 打开 / service 进程托管。
+//! service 托管（启动 / 端口 / 代理 / 健康检查 / 运行时提供）见 spec §5，后续步骤实现。
+//!
+//! 目录约定：`data_root()/extensions/<extId>/manifest.json`。
+//! 每个子目录是一个已安装扩展；manifest 损坏或缺失的目录会被标记为 invalid 返回，
+//! 让扩展中心能展示「此扩展不可用」而非静默消失。
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::path::Path;
+use tauri::Manager;
+
+/// 扩展运行时类型：web（纯前端）/ service（带后端服务）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtensionRuntime {
+    Web,
+    Service,
+}
+
+impl Default for ExtensionRuntime {
+    fn default() -> Self {
+        ExtensionRuntime::Web
+    }
+}
+
+/// service 扩展的后端声明（manifest.backend）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendSpec {
+    /// 后端入口（相对扩展目录的路径）
+    pub entry: String,
+    /// 运行时引擎要求（宿主据此判断复用系统运行时或下载内置）
+    pub engine: Option<EngineSpec>,
+    /// 后端工作目录（相对扩展目录）
+    pub cwd: Option<String>,
+    /// 0 = 动态分配；固定端口需冲突检测
+    pub port: Option<u16>,
+    /// 监听主机（对外开服务用）。缺省/`127.0.0.1` = 本机（安全默认）；
+    /// `0.0.0.0` / 具体局域网地址 = 对外开放，需 `network` 权限（宿主启动时校验 + 放行防火墙）。
+    #[serde(default)]
+    pub host: Option<String>,
+    /// 健康检查路径（可选）
+    pub health: Option<String>,
+}
+
+impl BackendSpec {
+    /// 解析监听主机：缺省回退 `127.0.0.1`（本机，安全默认）。
+    pub fn listen_host(&self) -> String {
+        self.host.clone().unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+
+    /// 是否对外监听（非回环地址）。对外监听需要 `network` 权限。
+    pub fn is_external(&self) -> bool {
+        let host = self.listen_host();
+        // 忽略大小写比较：manifest 写 "LocalHost" 等变形是合法回环写法，不应误判为对外
+        !(host.eq_ignore_ascii_case("127.0.0.1")
+            || host.eq_ignore_ascii_case("::1")
+            || host.eq_ignore_ascii_case("localhost"))
+    }
+}
+
+/// 后端运行时引擎要求（backend.engine）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineSpec {
+    #[serde(rename = "type")]
+    pub engine_type: String,
+    #[serde(rename = "minVersion")]
+    pub min_version: Option<String>,
+}
+
+/// window / drawer 建议尺寸（manifest.minSize）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinSize {
+    pub w: f64,
+    pub h: f64,
+}
+
+/// 条件禁用（manifest.disabled）：满足任一条件则扩展被禁用（扫描时求值）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisableCondition {
+    /// 当前平台匹配则禁用："windows" | "macos" | "linux"
+    #[serde(default)]
+    pub platform: Option<String>,
+}
+
+/// 扩展动作（manifest.actions）：预定义的快捷动作，点击打开对应形态（能力注入）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionAction {
+    pub id: String,
+    pub title: String,
+    /// 点击打开哪个形态：module / view / window / drawer
+    pub surface: String,
+}
+
+/// 宿主当前已实现的能力全集（`namespace.method`），供 manifest.requires 校验。
+/// 来源 = 桥 API 能力表（xhub_api::capabilities）。
+pub fn host_capabilities() -> std::collections::HashSet<String> {
+    crate::xhub_api::capabilities()
+        .iter()
+        .map(|c| format!("{}.{}", c.namespace, c.method))
+        .collect()
+}
+
+/// 求值条件禁用：任一条件命中返回 true。
+fn condition_matches(cond: &DisableCondition) -> bool {
+    if let Some(platform) = cond.platform.as_deref() {
+        if platform.eq_ignore_ascii_case(std::env::consts::OS) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 工作台模块形态声明（manifest.moduleVariants，可选）。
+/// 声明后扩展的 module 形态在工作台模块库里以多个形态注册（min/ideal 尺寸、适配徽标、
+/// 拖入落位均按声明生效）；不声明则只有一个默认形态（沿用固定 min 2×2 / ideal 4×3）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleVariant {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "minW")]
+    pub min_w: u32,
+    #[serde(rename = "minH")]
+    pub min_h: u32,
+    #[serde(rename = "idealW")]
+    pub ideal_w: u32,
+    #[serde(rename = "idealH")]
+    pub ideal_h: u32,
+}
+
+/// 工作台模块选项（manifest.moduleOptions，可选；仅对 module 形态有效）。
+///
+/// `default_hide_title` = 作者显式声明「这张卡默认要不要宿主表头」。扩展 module 卡片默认**没有**表头
+/// （卡面完全由扩展自己画）；作者想让宿主渲染与内置模块一致的表头（品牌色图标 + manifest.name），
+/// 就写 `"moduleOptions": { "defaultHideTitle": false }`。用户在布局编辑器里用「Aa」可按卡片覆盖，
+/// 用户显式设置优先于这里。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModuleOptions {
+    /// None = 未声明（默认不显示表头）；Some(false) = 默认显示；Some(true) = 默认不显示
+    #[serde(default, rename = "defaultHideTitle")]
+    pub default_hide_title: Option<bool>,
+}
+
+/// 标题栏小部件选项（manifest.titlebarOptions，可选；推标题栏小部件的扩展用）。
+///
+/// `position` = 作者声明的小部件**默认显示位**（`left` / `center` / `right`，缺省居中）。
+/// 只影响「用户没调过」时的落位：解析链为 用户显式设置（`titlebar_widget_positions`）
+/// > manifest 默认 > 居中；非法取值按未声明处理。运行期 `titlebar.set` 不携带位置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TitlebarOptions {
+    #[serde(default, rename = "position")]
+    pub position: Option<String>,
+}
+
+/// 归一 manifest.titlebarOptions.position：只认 left/center/right，其余（含缺省）回 None = 按居中
+fn titlebar_position_of(opts: Option<&TitlebarOptions>) -> Option<String> {
+    opts.and_then(|o| o.position.as_deref())
+        .filter(|p| matches!(*p, "left" | "center" | "right"))
+        .map(str::to_string)
+}
+
+/// 扩展声明给 AI 助手的工具（manifest.agent.tools[]，可选）。
+/// 这是「宿主不知道扩展里有什么数据」的解法：扩展**自描述**——声明工具名、用途、
+/// 参数 JSON Schema 与返回值形状，宿主聚合后经 extension_tool_list/call 两个
+/// 内置 Agent 工具暴露给模型（对齐 MCP tools/list + tools/call 模式）。
+/// 一期仅 service 扩展可声明：后端由宿主托管常驻，AI 随时可调，不依赖扩展页面是否打开。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentToolDecl {
+    /// 工具名（扩展内唯一，[a-z0-9_-]；模型看到的是 extension_tool_call 的 args，非全局命名空间）
+    pub name: String,
+    /// 一句话说明用途与返回内容（模型判断「什么时候该调我」的唯一依据，务必写清）
+    pub description: String,
+    /// 审批档位：read（默认）/ write / dangerous——**AI 侧授权档**，与 manifest.permissions
+    /// 两套体系（计划 §5 铁律：AI 工具授权 ≠ 扩展 manifest 权限，不可混用）
+    #[serde(default = "default_agent_level")]
+    pub level: String,
+    /// 参数 JSON Schema（object，缺省 = 无参）；与内置 AgentTool::parameters 同口径
+    #[serde(default)]
+    pub parameters: Value,
+    /// 返回值形状说明（可选，纯文本）：告诉模型结果长什么样，免试调一轮
+    #[serde(default)]
+    pub returns: String,
+}
+
+fn default_agent_level() -> String {
+    "read".to_string()
+}
+
+impl AgentToolDecl {
+    /// 语义校验：name/description 非空且 name 限 [a-z0-9_-]，level 三档白名单，
+    /// parameters 缺省或为 object。不合格的声明在装配 ExtensionEntry 时**跳过并落日志**
+    /// （一条坏声明不能弄哑整个扩展），返回 Err 的原因供日志定位。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("工具名为空".into());
+        }
+        if !self.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
+            return Err(format!("工具名 {} 含非法字符（只允许小写字母/数字/_/-）", self.name));
+        }
+        if self.description.trim().is_empty() {
+            return Err(format!("工具 {} 缺 description（模型靠它判断何时调用）", self.name));
+        }
+        if !matches!(self.level.as_str(), "read" | "write" | "dangerous") {
+            return Err(format!("工具 {} 的 level {} 不在三档白名单", self.name, self.level));
+        }
+        if !self.parameters.is_null() && !self.parameters.is_object() {
+            return Err(format!("工具 {} 的 parameters 必须是 JSON object", self.name));
+        }
+        Ok(())
+    }
+}
+
+/// manifest.agent 整体（可选）：{ "tools": [ ... ] }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpec {
+    #[serde(default)]
+    pub tools: Vec<AgentToolDecl>,
+}
+
+/// 扩展 manifest（manifest.json），对齐 spec §4。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionManifest {
+    /// 唯一标识，反向域名
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// 运行时：web（默认）| service
+    #[serde(default)]
+    pub runtime: ExtensionRuntime,
+    /// 默认 / 主形态：module / view / window / drawer
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// 声明支持哪些形态
+    #[serde(default)]
+    pub surfaces: Vec<String>,
+    /// app 形态下支持哪些打开方式（manifest 字段为 openIn）
+    #[serde(default, rename = "openIn")]
+    pub open_in: Vec<String>,
+    /// 各形态入口：形态 → 相对扩展目录的路径
+    #[serde(default)]
+    pub entry: HashMap<String, String>,
+    /// 能力申请，按需授权
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// 依赖的宿主能力（`namespace.method`，如 "data.notes.list"）；宿主缺失则标 missing_capabilities
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// 依赖的其它扩展 id（manifest 字段为 dependsOn）；未安装则标 missing_dependencies
+    #[serde(default, rename = "dependsOn")]
+    pub depends_on: Vec<String>,
+    /// 条件禁用（manifest 字段为 disabled）
+    #[serde(default)]
+    pub disabled: Option<DisableCondition>,
+    /// 暴露给其它扩展调用的方法名（跨扩展调用白名单，manifest 字段为 expose）
+    #[serde(default)]
+    pub expose: Vec<String>,
+    /// 快捷动作（manifest 字段为 actions，能力注入）
+    #[serde(default)]
+    pub actions: Vec<ExtensionAction>,
+    /// 图标（相对扩展目录的路径）
+    pub icon: Option<String>,
+    /// window / drawer 建议尺寸（manifest 字段为 minSize）
+    #[serde(default, rename = "minSize")]
+    pub min_size: Option<MinSize>,
+    /// service 专属：受托管的后端服务声明
+    pub backend: Option<BackendSpec>,
+    /// 一句话描述（列表展示用；spec §4 未列，作为可选补充字段）
+    #[serde(default)]
+    pub description: String,
+    /// 作者署名（市场卡片与详情页展示；发布弹窗可补填并回写本字段）
+    #[serde(default)]
+    pub author: Option<String>,
+    /// 分类（市场/已安装列表分类筛选用；发布弹窗可选并回写本字段，缺省 = 未分类）
+    #[serde(default)]
+    pub category: Option<String>,
+    /// 扩展默认配置（对象）；用户覆盖存 `.config.json`，读取时用户覆盖优先（配置分层）
+    #[serde(default)]
+    pub config: Map<String, Value>,
+    /// 工作台模块形态声明（manifest 字段为 moduleVariants；module 形态可选多形态）
+    #[serde(default, rename = "moduleVariants")]
+    pub module_variants: Vec<ModuleVariant>,
+    /// 工作台模块选项（manifest 字段为 moduleOptions；module 形态可选）
+    #[serde(default, rename = "moduleOptions")]
+    pub module_options: ModuleOptions,
+    /// 标题栏小部件选项（manifest 字段为 titlebarOptions；推小部件的扩展可选声明默认显示位）
+    #[serde(default, rename = "titlebarOptions")]
+    pub titlebar_options: Option<TitlebarOptions>,
+    /// 声明给 AI 助手的工具（manifest.agent.tools；经校验后的合格子集，见 AgentToolDecl）
+    #[serde(default)]
+    pub agent: Option<AgentSpec>,
+}
+
+fn default_kind() -> String {
+    "view".to_string()
+}
+
+/// 扩展来源：已装（位于扩展根，可被市场更新 / 卸载）
+pub const SOURCE_INSTALLED: &str = "installed";
+/// 扩展来源：「我的扩展」直挂的本机源码目录（不参与市场更新与卸载，见 docs/adr/0005）
+pub const SOURCE_DEV: &str = "dev";
+
+/// 已安装扩展的注册表项（返回给前端的展示结构）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtensionEntry {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// "web" | "service"
+    pub runtime: String,
+    /// 默认 / 主形态
+    pub kind: String,
+    pub surfaces: Vec<String>,
+    pub open_in: Vec<String>,
+    pub permissions: Vec<String>,
+    pub description: String,
+    /// 作者署名（manifest.author；发布弹窗预填与回写用）
+    pub author: Option<String>,
+    /// 分类（manifest.category；扩展中心分类筛选用，None = 未分类）
+    pub category: Option<String>,
+    /// 图标文件绝对路径（存在时才非空）
+    pub icon: Option<String>,
+    /// 扩展目录绝对路径
+    pub dir: String,
+    /// 来源："installed"（已装，位于扩展根）| "dev"（「我的扩展」直挂的本机源码目录）
+    pub source: String,
+    /// manifest 缺失 / 解析失败时为 true
+    pub invalid: bool,
+    /// invalid 时的原因（供扩展中心友好展示）
+    pub error: Option<String>,
+    /// 条件禁用求值结果：true = 被禁用（前端灰显 / 不展示入口）
+    pub disabled: bool,
+    /// 缺失的宿主能力（manifest.requires 中宿主未实现的）
+    pub missing_capabilities: Vec<String>,
+    /// 缺失的依赖扩展 id（manifest.dependsOn 中未安装的）
+    pub missing_dependencies: Vec<String>,
+    /// 扩展声明的依赖扩展 id（manifest.dependsOn 原样，供前端展示依赖关系）
+    pub depends_on: Vec<String>,
+    /// 暴露给其它扩展调用的方法名（manifest.expose）
+    pub expose: Vec<String>,
+    /// 快捷动作（manifest.actions）
+    pub actions: Vec<ExtensionAction>,
+    /// 工作台模块形态声明（module 形态多形态注册；空 = 单个默认形态）
+    pub module_variants: Vec<ModuleVariant>,
+    /// 工作台模块选项（manifest.moduleOptions 原样透传；module 卡片表头默认显隐用）
+    pub module_options: ModuleOptions,
+    /// 标题栏小部件默认显示位（manifest.titlebarOptions.position 归一后的 left/center/right；
+    /// None = 未声明或取值非法，按居中。用户在设置 → 外观 的显式选择优先）
+    pub titlebar_position: Option<String>,
+    /// 安装时间（目录创建时间，RFC3339；前端「已安装」列表按此排序，最后安装的在最下面）。
+    /// 取文件系统元数据，对本客户端装之前就存在的扩展同样有效；取不到时为 None
+    pub installed_at: Option<String>,
+    /// 声明给 AI 助手的工具（manifest.agent.tools 校验后的合格子集；扩展设置弹窗展示 + 聚合给 Agent）
+    pub agent_tools: Vec<AgentToolDecl>,
+}
+
+fn runtime_str(r: &ExtensionRuntime) -> &'static str {
+    match r {
+        ExtensionRuntime::Web => "web",
+        ExtensionRuntime::Service => "service",
+    }
+}
+
+/// 扩展根目录：`data_root()/extensions/`
+/// 注意必须用 `paths::data_root()`（便携版跟随 exe 目录\data），
+/// 不能用 `app_data_dir()`——后者永远返回 %APPDATA% 下的目录，便携版会装到用户目录。
+pub fn extensions_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let _ = app;
+    Ok(crate::paths::data_root().join("extensions"))
+}
+
+/// 是否为隐藏目录（`.` 开头）。扩展 id 不以 `.` 开头；`.backup/`、`.tmp-update/`
+/// 等内部暂存目录在扫描 / stamp 时一律跳过，避免被当成扩展或干扰热更新戳。
+fn is_hidden_dir(p: &std::path::Path) -> bool {
+    p.file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
+}
+
+/// 扫描扩展根目录，解析每个子目录的 manifest.json。
+/// 单个目录解析失败不影响整体扫描，只标记该目录为 invalid。
+pub fn scan_extensions(app: &tauri::AppHandle) -> Result<Vec<ExtensionEntry>, String> {
+    let root = extensions_root(app)?;
+    let mut entries = Vec::new();
+    if root.exists() {
+        let dirs = std::fs::read_dir(&root).map_err(|e| e.to_string())?;
+        for entry in dirs.flatten() {
+            let path = entry.path();
+            if path.is_dir() && !is_hidden_dir(&path) {
+                entries.push(load_extension(&path, SOURCE_INSTALLED));
+            }
+        }
+    }
+
+    // 本机源码目录直挂（不复制进扩展根，见 docs/adr/0005）。
+    // 已装扩展优先：同 id 冲突时跳过开发目录，避免「打开的到底是哪一份」这种排查噩梦。
+    // 注：v0.6.x 起**不再有「开发者模式」开关**——加进「我的扩展」就等于要调试，登记即加载。
+    let cfg = crate::config::load();
+    // 只把**有效**的已装扩展计入同 id 冲突检查：invalid 条目的 id 取自目录名，
+    // 一个坏目录（没有 manifest）会凭目录名把同名的开发扩展顶掉，列表里就只剩那条「不可用」。
+    let installed_ids: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| !e.invalid)
+        .map(|e| e.id.clone())
+        .collect();
+    for dir in &cfg.dev_extensions {
+        let path = std::path::PathBuf::from(dir);
+        if !path.is_dir() {
+            log::warn!("开发扩展目录不存在，已跳过: {dir}");
+            continue;
+        }
+        let entry = load_extension(&path, SOURCE_DEV);
+        if installed_ids.contains(&entry.id) {
+            log::warn!(
+                "开发扩展 {} 与已装扩展同 id，已跳过开发目录 {}",
+                entry.id,
+                dir
+            );
+            continue;
+        }
+        entries.push(entry);
+    }
+
+    // dependsOn 后处理：收集已安装的 valid 扩展 id，回填 missing_dependencies
+    let installed_ids: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| !e.invalid)
+        .map(|e| e.id.clone())
+        .collect();
+    for entry in &mut entries {
+        if entry.invalid {
+            continue;
+        }
+        entry.missing_dependencies = entry
+            .depends_on
+            .iter()
+            .filter(|d| !installed_ids.contains(*d))
+            .cloned()
+            .collect();
+    }
+
+    // 按名称排序（中文按 Unicode 码点），保证列表稳定
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// 读取扩展目录下的 manifest.json。
+pub fn read_manifest(dir: &Path) -> Result<ExtensionManifest, String> {
+    let content = std::fs::read_to_string(dir.join("manifest.json"))
+        .map_err(|e| format!("读取 manifest.json 失败：{e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("manifest 解析失败：{e}"))
+}
+
+/// 目录创建时间（RFC3339）＝安装时间的最佳代理。Windows NTFS 支持创建时间；
+/// 市场更新经 tmp 目录换名落位，创建时间反映最近一次落盘——排序用途足够
+fn dir_created_at(dir: &Path) -> Option<String> {
+    let created = std::fs::metadata(dir).ok()?.created().ok()?;
+    let dt: chrono::DateTime<chrono::Utc> = created.into();
+    Some(dt.to_rfc3339())
+}
+
+/// 加载单个扩展目录为注册表项（永不 panic，损坏时返回 invalid 项）。
+/// `source` 区分「已装扩展」（扩展根）与「开发扩展」（「我的扩展」直挂的源码目录）。
+fn load_extension(dir: &Path, source: &str) -> ExtensionEntry {
+    // 目录一律归一（剥 Windows 的 `\\?\` verbatim 前缀）：`entry.dir` 会回传前端，与
+    // `dev_mode_status().path` 逐字符比对（「我的扩展」的发布按钮 `canPublish` 靠它匹配），
+    // 也与喂给 Node 的脚本路径同源——两处口径不一致就会出现「扩展在跑但发布按钮不见了」。
+    let dir = &crate::paths::simplify_existing(dir);
+    let dir_str = dir.to_string_lossy().into_owned();
+    let installed_at = dir_created_at(dir);
+    let fallback_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir_str.clone());
+
+    let invalid = |error: String| ExtensionEntry {
+        id: fallback_name.clone(),
+        name: fallback_name,
+        version: String::new(),
+        runtime: "web".to_string(),
+        kind: "view".to_string(),
+        surfaces: Vec::new(),
+        open_in: Vec::new(),
+        permissions: Vec::new(),
+        description: String::new(),
+        author: None,
+        category: None,
+        icon: None,
+        dir: dir_str.clone(),
+        source: source.to_string(),
+        invalid: true,
+        error: Some(error),
+        disabled: false,
+        missing_capabilities: Vec::new(),
+        missing_dependencies: Vec::new(),
+        depends_on: Vec::new(),
+        expose: Vec::new(),
+        actions: Vec::new(),
+        module_variants: Vec::new(),
+        module_options: ModuleOptions::default(),
+        titlebar_position: None,
+        installed_at: installed_at.clone(),
+        agent_tools: Vec::new(),
+    };
+
+    let manifest = match read_manifest(dir) {
+        Ok(m) => m,
+        Err(e) => return invalid(e),
+    };
+
+    let icon = manifest.icon.as_ref().and_then(|rel| {
+        let p = dir.join(rel);
+        p.is_file().then(|| crate::ext_protocol::entry_url(&manifest.id, rel))
+    });
+
+    // 条件禁用求值（manifest.disabled）
+    let disabled = manifest
+        .disabled
+        .as_ref()
+        .map(condition_matches)
+        .unwrap_or(false);
+
+    // requires 能力校验：宿主未实现的能力进 missing_capabilities
+    let host_caps = host_capabilities();
+    let missing_capabilities: Vec<String> = manifest
+        .requires
+        .iter()
+        .filter(|r| !host_caps.contains(*r))
+        .cloned()
+        .collect();
+
+    // AI 工具声明校验：合格的进 Entry（扩展设置弹窗展示 + Agent 聚合共用），
+    // 坏声明跳过并落日志——一条坏声明不能弄哑整个扩展
+    let agent_tools = filter_agent_tools(&manifest.id, manifest.agent.as_ref());
+
+    ExtensionEntry {
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        runtime: runtime_str(&manifest.runtime).to_string(),
+        kind: manifest.kind,
+        surfaces: manifest.surfaces,
+        open_in: manifest.open_in,
+        permissions: manifest.permissions,
+        description: manifest.description,
+        author: manifest.author,
+        category: manifest.category,
+        icon,
+        dir: dir_str,
+        source: source.to_string(),
+        invalid: false,
+        error: None,
+        disabled,
+        missing_capabilities,
+        missing_dependencies: Vec::new(), // 后处理填（见 scan_extensions）
+        depends_on: manifest.depends_on,
+        expose: manifest.expose,
+        actions: manifest.actions,
+        module_variants: manifest.module_variants,
+        module_options: manifest.module_options,
+        titlebar_position: titlebar_position_of(manifest.titlebar_options.as_ref()),
+        installed_at,
+        agent_tools,
+    }
+}
+
+/// 校验 manifest.agent.tools：只保留合格声明；重名/不合格的跳过并落日志。
+/// 单一校验点——ExtensionEntry.agent_tools 的消费者（扩展设置弹窗、Agent 聚合器）
+/// 拿到的都已经是干净清单，不必各自再验。
+fn filter_agent_tools(ext_id: &str, agent: Option<&AgentSpec>) -> Vec<AgentToolDecl> {
+    let Some(spec) = agent else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for t in &spec.tools {
+        if let Err(e) = t.validate() {
+            log::warn!("扩展 {ext_id} 的 AI 工具声明被跳过：{e}");
+            continue;
+        }
+        if !seen.insert(t.name.clone()) {
+            log::warn!("扩展 {ext_id} 的 AI 工具 {} 重名，后者被跳过", t.name);
+            continue;
+        }
+        out.push(t.clone());
+    }
+    out
+}
+
+/// 列出已安装扩展（Tauri 命令）。
+#[tauri::command]
+pub fn list_extensions(app: tauri::AppHandle) -> Result<Vec<ExtensionEntry>, String> {
+    let entries = scan_extensions(&app)?;
+    log::info!("扩展注册表扫描完成：{} 个扩展", entries.len());
+    Ok(entries)
+}
+
+/// 重启 service 扩展的 Node 后端（Tauri 命令）：先停后起，端口会重新分配。
+///
+/// 为什么需要单独一条：「刷新」只重载 iframe，而 `start_service` 是幂等的
+/// （进程在 map 里就直接复用），所以改后端代码后光刷新永远拿不到新逻辑。
+/// 重启后扩展端不必刷新页面——`service.request` 每次按 extId 现查端口映射。
+#[tauri::command]
+pub fn restart_extension_service(app: tauri::AppHandle, ext_id: String) -> Result<u16, String> {
+    crate::service::stop_service(&app, &ext_id);
+    let port = crate::service::start_service(&app, &ext_id)?;
+    log::info!("service 扩展后端已重启: {ext_id} port={port}");
+    Ok(port)
+}
+
+// ---------------- 「我的扩展」：本机源码目录直挂（docs/adr/0005） ----------------
+
+/// 单个开发扩展目录的解析结果（扩展中心「我的扩展」展示用）
+#[derive(Debug, Clone, Serialize)]
+pub struct DevExtensionInfo {
+    /// 注册的源码目录（**归一后的普通路径**，前端按它调 remove_dev_extension）
+    pub path: String,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// manifest 是否可解析
+    pub valid: bool,
+    /// valid=false 时的原因
+    pub error: Option<String>,
+    /// 与已装扩展同 id（此时不会被加载，已装优先）
+    pub conflict: bool,
+    /// 目录当前是否存在
+    pub exists: bool,
+}
+
+/// 本机源码目录清单（get/add/remove 命令的统一返回）。
+/// `enabled` 为兼容旧前端保留，恒为 true——v0.6.x 起没有「开发者模式」开关，登记即加载。
+#[derive(Debug, Clone, Serialize)]
+pub struct DevModeStatus {
+    pub enabled: bool,
+    pub extensions: Vec<DevExtensionInfo>,
+}
+
+/// 把配置中的本机源码目录加入资产作用域并填开发注册表。
+/// 启动重放与「新增目录」时调用；目录的作用域放行不落盘，重启必须重放。
+pub fn apply_dev_extensions(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<crate::ext_protocol::DevExtensionDirs>() {
+        state.clear();
+    }
+    let cfg = crate::config::load();
+    for dir in &cfg.dev_extensions {
+        // 历史配置里可能存着 canonicalize 留下的 verbatim（`\\?\…`）前缀：一律归一成
+        // 普通路径后再放行/注册，否则 service 后端会因 Node 读不了带前缀的脚本路径而
+        // 静默退出（见 paths::simplify_path）。这里归一即可自愈，用户无需手改 app.json
+        let path = crate::paths::simplify_existing(&std::path::PathBuf::from(dir));
+        if !path.is_dir() {
+            log::warn!("开发扩展目录不存在，跳过放行: {dir}");
+            continue;
+        }
+        // 扩展资源只由独立内容协议提供，不能加入全局 asset 作用域。
+        if let Some(state) = app.try_state::<crate::ext_protocol::DevExtensionDirs>() {
+            let id = read_manifest(&path).map(|m| m.id).unwrap_or_else(|_| {
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            state.insert(id, path.clone());
+        }
+    }
+    log::info!("本机源码目录已应用：{} 个", cfg.dev_extensions.len());
+}
+
+/// 撤销某目录的作用域放行并从开发注册表移除（移除目录时调用）
+fn revoke_dev_dir(app: &tauri::AppHandle, dir: &str) {
+    let path = std::path::PathBuf::from(dir);
+    if let Err(e) = app.asset_protocol_scope().forbid_directory(&path, true) {
+        log::warn!("开发扩展目录撤销放行失败 {dir}: {e}");
+    }
+    if let Some(state) = app.try_state::<crate::ext_protocol::DevExtensionDirs>() {
+        for (id, p) in state.snapshot() {
+            if p == path {
+                state.remove(&id);
+            }
+        }
+    }
+}
+
+/// 汇总本机源码目录清单（含与已装扩展的 id 冲突检测）
+fn dev_mode_status(app: &tauri::AppHandle) -> DevModeStatus {
+    let cfg = crate::config::load();
+    let installed_ids: std::collections::HashSet<String> = extensions_root(app)
+        .ok()
+        .and_then(|root| std::fs::read_dir(root).ok())
+        .map(|dirs| {
+            dirs.flatten()
+                .filter(|e| e.path().is_dir() && !is_hidden_dir(&e.path()))
+                .filter_map(|e| read_manifest(&e.path()).ok().map(|m| m.id))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut extensions = Vec::new();
+    for dir in &cfg.dev_extensions {
+        // 归一后再展示与回传：前端拿这个 path 调 remove_dev_extension，
+        // 两边口径必须一致（历史配置的 `\\?\…` 不该显示给用户，也不该导致移除失灵）
+        let path = crate::paths::simplify_existing(&std::path::PathBuf::from(dir));
+        let exists = path.is_dir();
+        let fallback = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let (id, name, version, valid, error) = match read_manifest(&path) {
+            Ok(m) => (m.id, m.name, m.version, true, None),
+            Err(e) => (fallback, String::new(), String::new(), false, Some(e)),
+        };
+        let conflict = valid && installed_ids.contains(&id);
+        extensions.push(DevExtensionInfo {
+            path: path.to_string_lossy().into_owned(),
+            id,
+            name,
+            version,
+            valid,
+            error,
+            conflict,
+            exists,
+        });
+    }
+    DevModeStatus {
+        enabled: true,
+        extensions,
+    }
+}
+
+/// 读取本机源码目录清单（「我的扩展」标签页的列表真源）
+#[tauri::command]
+pub fn get_dev_mode_status(app: tauri::AppHandle) -> Result<DevModeStatus, String> {
+    Ok(dev_mode_status(&app))
+}
+
+/// 添加一个本机扩展源码目录（含 manifest.json 的目录）；保存后立即放行并加载，无需重启
+#[tauri::command]
+pub fn add_dev_extension(app: tauri::AppHandle, path: String) -> Result<DevModeStatus, String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if !p.is_dir() {
+        return Err(format!("INVALID_ARGUMENT: 目录不存在：{}", p.display()));
+    }
+    if !p.join("manifest.json").is_file() {
+        return Err(
+            "INVALID_ARGUMENT: 该目录下没有 manifest.json（不是扩展源码目录）".to_string(),
+        );
+    }
+    // 扩展根内的目录属已装扩展，不该当开发扩展直挂
+    let root = extensions_root(&app)?;
+    if let (Ok(a), Ok(b)) = (p.canonicalize(), root.canonicalize()) {
+        if a.starts_with(&b) {
+            return Err(
+                "INVALID_ARGUMENT: 该目录位于扩展根内（属已装扩展），无需直挂".to_string(),
+            );
+        }
+    }
+    let manifest = read_manifest(&p)?;
+    let canonical = p
+        .canonicalize()
+        .map_err(|e| format!("IO_ERROR: 解析目录失败：{e}"))?;
+    // ⚠️ 落盘前必须剥掉 verbatim 前缀：Windows 的 `canonicalize` 返回 `\\?\A:\…` 形式，
+    // 它会一路带到 service 后端启动（Node 的 CJS 加载器读不了带前缀的脚本路径 → 后端
+    // 静默 `exit 1`，「开发目录挂的 service 扩展后端永远起不来」的根因）、`explorer` 打开
+    // 目录、以及 asset 作用域匹配。存进配置的路径一律是普通 Win32 形式（见 paths::simplify_path）
+    let canonical = crate::paths::simplify_existing(&canonical);
+    let dir_str = canonical.to_string_lossy().into_owned();
+
+    // 读-改-写必须持配置写锁（见 config::lock 的约定）：否则会与并发的 save_config
+    // 互相覆盖（前端整份配置落盘），刚登记的目录在下次读盘时凭空消失
+    let _guard = crate::config::lock();
+    let mut cfg = crate::config::load();
+    // 与历史配置比较也要归一：老版本存下的 `\\?\…` 与新存的普通路径是同一个目录，
+    // 不归一会重复登记（同一目录在「我的扩展」里出现两行）
+    let already = cfg
+        .dev_extensions
+        .iter()
+        .any(|d| crate::paths::simplify_path(std::path::Path::new(d)) == canonical);
+    if !already {
+        cfg.dev_extensions.push(dir_str.clone());
+        crate::config::save(&cfg)?;
+    }
+    // 登记即加载，但不把源码目录暴露到共享 asset 来源。
+    if let Some(state) = app.try_state::<crate::ext_protocol::DevExtensionDirs>() {
+        state.insert(manifest.id.clone(), canonical.clone());
+    }
+    log::info!("本机扩展目录已添加: {} -> {dir_str}", manifest.id);
+    Ok(dev_mode_status(&app))
+}
+
+/// 移除一个本机扩展源码目录（源码目录本身不动）
+#[tauri::command]
+pub fn remove_dev_extension(app: tauri::AppHandle, path: String) -> Result<DevModeStatus, String> {
+    let raw = std::path::PathBuf::from(path.trim());
+    // 与配置里的值都归一后再比较：历史配置可能存着 `\\?\…` 前缀，而前端回传的是
+    // dev_mode_status 归一后的路径——不归一会「点移除没反应」（见 paths::simplify_path）
+    let target = crate::paths::simplify_path(&raw);
+    // 同 add_dev_extension：读-改-写持配置写锁，避免与并发的整份 save_config 互相覆盖
+    let _guard = crate::config::lock();
+    let mut cfg = crate::config::load();
+    let before = cfg.dev_extensions.len();
+    cfg.dev_extensions
+        .retain(|d| crate::paths::simplify_path(std::path::Path::new(d)) != target);
+    if cfg.dev_extensions.len() != before {
+        crate::config::save(&cfg)?;
+    }
+    // 撤销放行用「可访问形式」：注册表里存的是 simplify_existing 的结果
+    revoke_dev_dir(&app, &crate::paths::simplify_existing(&raw).to_string_lossy());
+    log::info!("本机扩展目录已移除: {}", target.display());
+    Ok(dev_mode_status(&app))
+}
+
+/// 本机源码目录内容戳：对每个目录下的文件（相对路径 + mtime 秒）做 FNV-1a。
+/// 前端轮询它以触发热重载——HTML/CSS/JS 改动都算变更（`extensions_stamp` 只盯 manifest，
+/// 那是给"已装扩展被外部改动"用的，开发调试需要全目录口径）。
+#[tauri::command]
+pub fn dev_extensions_stamp(app: tauri::AppHandle) -> Result<u64, String> {
+    let _ = app;
+    let cfg = crate::config::load();
+    if cfg.dev_extensions.is_empty() {
+        return Ok(0);
+    }
+    let mut dirs: Vec<String> = cfg.dev_extensions.clone();
+    dirs.sort();
+    let mut hash: u64 = 1469598103934665603; // FNV-1a offset basis
+    for dir in &dirs {
+        let root = crate::paths::simplify_existing(&std::path::PathBuf::from(dir));
+        if root.is_dir() {
+            hash_path_tree(&root, &root, &mut hash, 0);
+        }
+    }
+    Ok(hash)
+}
+
+/// 递归把目录树混入哈希：跳过隐藏目录（`.` 开头）与 `node_modules`，限深 8 层防失控
+fn hash_path_tree(root: &Path, dir: &Path, hash: &mut u64, depth: u32) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut items: Vec<_> = entries.flatten().collect();
+    items.sort_by_key(|e| e.path());
+    for entry in items {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "node_modules" {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        if path.is_dir() {
+            mix_hash(hash, &rel);
+            hash_path_tree(root, &path, hash, depth + 1);
+        } else if let Ok(meta) = std::fs::metadata(&path) {
+            let secs = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            mix_hash(hash, &rel);
+            mix_hash(hash, &secs.to_string());
+        }
+    }
+}
+
+fn mix_hash(hash: &mut u64, s: &str) {
+    for b in s.bytes() {
+        *hash ^= b as u64;
+        *hash = hash.wrapping_mul(1099511628211);
+    }
+}
+
+/// 扩展目录内容戳：对所有 manifest.json 的「路径 + 修改时间」做 FNV-1a 哈希。
+/// 前端扩展中心轮询此戳，变化即刷新列表（运行时热更新：新装/卸载/改 manifest 无需重启）。
+#[tauri::command]
+pub fn extensions_stamp(app: tauri::AppHandle) -> Result<u64, String> {
+    let root = extensions_root(&app)?;
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut hash: u64 = 1469598103934665603; // FNV-1a offset basis
+    let mut dirs: Vec<_> = std::fs::read_dir(&root)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|e| e.path().is_dir() && !is_hidden_dir(&e.path()))
+        .collect();
+    dirs.sort_by_key(|e| e.path());
+    for entry in dirs {
+        let manifest = entry.path().join("manifest.json");
+        if let Ok(meta) = std::fs::metadata(&manifest) {
+            if let Ok(mtime) = meta.modified() {
+                let secs = mtime
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                for b in manifest.to_string_lossy().bytes().chain(secs.to_le_bytes()) {
+                    hash ^= b as u64;
+                    hash = hash.wrapping_mul(1099511628211);
+                }
+            }
+        }
+    }
+    Ok(hash)
+}
+
+/// 注入到扩展入口 HTML 的桥脚本：在扩展 iframe 内挂载 `window.xhub`，
+/// 所有方法经 `window.parent.postMessage` 发 RPC 请求给主窗口，主窗口再 invoke `xhub_call`。
+/// 用普通 `<script>`（非 module）且在 `<head>` 靠前位置注入，保证早于扩展自身脚本执行。
+pub(crate) const XHUB_BRIDGE_SCRIPT: &str = r#"
+(function(){
+  var pending={};var seq=0;
+  var listeners={};
+  function call(ns,method,args){
+    return new Promise(function(resolve,reject){
+      var id=++seq;pending[id]={resolve:resolve,reject:reject};
+      window.parent.postMessage({__xhub:true,type:'call',id:id,namespace:ns,method:method,args:args},'*');
+    });
+  }
+  function emit(event,payload){
+    var arr=listeners[event];if(!arr)return;
+    for(var i=0;i<arr.length;i++){try{arr[i](payload);}catch(e){}}
+  }
+  // 把宿主主题令牌写到 documentElement 的 --xhub-* CSS 变量，扩展 CSS 直接引用即可跟随主题
+  function applyTheme(theme){
+    var root=document.documentElement;if(!root)return;
+    var dark=!!(theme&&theme.mode==='dark');
+    root.setAttribute('data-xhub-theme',dark?'dark':'light');
+    if(theme&&theme.preset){root.setAttribute('data-xhub-preset',theme.preset);}
+    var t=(theme&&theme.tokens)||{};
+    var map={
+      '--xhub-accent':t.accent,
+      '--xhub-brand':t.brand,
+      '--xhub-brand-soft':t.brandSoft,
+      '--xhub-bg-page':t.bgPage,
+      '--xhub-page-bg':t.pageBg,
+      '--xhub-bg-card':t.bgCard,
+      '--xhub-surface':t.surface,
+      '--xhub-text-1':t.text1,
+      '--xhub-text-2':t.text2,
+      '--xhub-text-3':t.text3,
+      '--xhub-border':t.border,
+      '--xhub-red':t.red,
+      '--xhub-green':t.green,
+      '--xhub-yellow':t.yellow,
+      '--xhub-blue':t.blue,
+      '--xhub-orange':t.orange,
+      '--xhub-radius-lg':t.radiusLg
+    };
+    for(var k in map){if(map[k]!=null&&map[k]!==''){root.style.setProperty(k,map[k]);}}
+    // 壁纸状态转写为 data-xhub-* 属性：扩展据此启停文字光晕等透底可读性样式
+    var wp=(theme&&theme.wallpaper)||{};
+    if(wp.on){root.setAttribute('data-xhub-wallpaper','1');}else{root.removeAttribute('data-xhub-wallpaper');}
+    if(wp.clear){root.setAttribute('data-xhub-wallpaper-clear','1');}else{root.removeAttribute('data-xhub-wallpaper-clear');}
+    if(wp.immersive){root.setAttribute('data-xhub-immersive','1');}else{root.removeAttribute('data-xhub-immersive');}
+  }
+  window.addEventListener('message',function(e){
+    if(e.source!==window.parent)return;
+    if(['http://tauri.localhost','https://tauri.localhost','tauri://localhost','http://localhost:1420'].indexOf(e.origin)<0)return;
+    var m=e.data;if(!m||m.__xhub!==true)return;
+    if(m.type==='result'){
+      var p=pending[m.id];if(!p)return;delete pending[m.id];
+      if(m.ok){p.resolve(m.data);}
+      else{var err=new Error(m.error&&m.error.message||'xhub error');err.code=m.error&&m.error.code;p.reject(err);}
+    }else if(m.type==='theme'){
+      applyTheme(m.theme);emit('theme-changed',m.theme);
+    }else if(m.type==='variant'){
+      // 工作台模块形态：module 形态多形态切换时由宿主广播；扩展据此切换内容
+      var v=m.variant||'';
+      var r=document.documentElement;if(r){r.setAttribute('data-xhub-variant',v);r.style.setProperty('--xhub-variant',v);}
+      emit('xhub:variant-changed',v);
+    }else if(m.type==='event'){
+      emit(m.event,m.payload);
+    }else if(m.type==='xhub-call-result'){
+      var p=pending[m.id];if(!p)return;delete pending[m.id];
+      if(m.ok){p.resolve(m.data);}
+      else{var err=new Error(m.error&&m.error.message||'call error');err.code=m.error&&m.error.code;p.reject(err);}
+    }else if(m.type==='xhub-call-req'){
+      var h=exposed[m.method];
+      if(!h){window.parent.postMessage({__xhub:true,type:'xhub-call-result',id:m.id,ok:false,error:{message:'method not exposed: '+m.method}},'*');return;}
+      var done=function(data){window.parent.postMessage({__xhub:true,type:'xhub-call-result',id:m.id,ok:true,data:data},'*');};
+      var fail=function(err){window.parent.postMessage({__xhub:true,type:'xhub-call-result',id:m.id,ok:false,error:{message:String(err&&err.message||err)}},'*');};
+      try{Promise.resolve(h(m.payload)).then(done).catch(fail);}catch(err){fail(err);}
+    }
+  });
+  // 本扩展暴露给其它扩展调用的方法（跨扩展调用）
+  var exposed={};
+  window.xhub={
+    // 通用调用通道：直接调任意 CAPABILITIES 方法（新增能力无需等桥封装更新）。
+    // 函数体内的 call 解析到闭包私有的 rpc 实现，不会递归到 window.xhub.call
+    call:function(ns,method,args){return call(ns,method,args||{});},
+    runtime:{
+      info:function(){return call('runtime','info',{});},
+      open:function(surface){window.parent.postMessage({__xhub:true,type:'open',surface:surface||'view'},'*');return Promise.resolve();},
+      // 请求宿主打开本扩展的设置/授权弹窗（runtime.openPermissions 能力，无需权限）。
+      // 典型用途：service 后端未授权时，扩展页展示提示并给「去授权」跳转
+      // （见 references/bridge-api.md）。
+      openPermissions:function(){return call('runtime','openPermissions',{});},
+      callExtension:function(targetId,method,payload){
+        return new Promise(function(resolve,reject){
+          var id=++seq;pending[id]={resolve:resolve,reject:reject};
+          window.parent.postMessage({__xhub:true,type:'xhub-call',id:id,targetId:targetId,method:method,payload:payload},'*');
+        });
+      }
+    },
+    storage:{
+      get:function(k){return call('storage','get',{key:k});},
+      set:function(k,v){return call('storage','set',{key:k,value:v});},
+      remove:function(k){return call('storage','remove',{key:k});},
+      clear:function(){return call('storage','clear',{});}
+    },
+    config:{
+      get:function(k){return call('config','get',{key:k});},
+      set:function(k,v){return call('config','set',{key:k,value:v});},
+      remove:function(k){return call('config','remove',{key:k});},
+      all:function(){return call('config','all',{});}
+    },
+    sharedStorage:{
+      // A：get/set/remove 由宿主自动放进本扩展的 ext:<id>: 命名空间，代码不用改；
+      // B：读别家数据走 getFrom(ownerId, key)，别自己拼前缀（老宿主没有此方法，先特性探测）
+      get:function(k){return call('sharedStorage','get',{key:k});},
+      set:function(k,v){return call('sharedStorage','set',{key:k,value:v});},
+      remove:function(k){return call('sharedStorage','remove',{key:k});},
+      getFrom:function(id,k){return call('sharedStorage','getFrom',{extId:id,key:k});}
+    },
+    // data 命名空间：与 Rust CAPABILITIES 的 data.* 能力一一对应（读方法带明确参数，
+    // 写方法整包透传 opts——expectedVersion 等可选字段原样传递）。新增能力必须同步此表
+    //（单测 bridge_script_covers_all_data_capabilities 兜底），或让扩展走 xhub.call 通用通道。
+    data:{
+      notes:{
+        list:function(){return call('data','notes.list',{});},
+        get:function(id){return call('data','notes.get',{id:id});},
+        create:function(opts){return call('data','notes.create',opts||{});},
+        update:function(opts){return call('data','notes.update',opts||{});},
+        delete:function(opts){return call('data','notes.delete',opts||{});}
+      },
+      todos:{
+        list:function(){return call('data','todos.list',{});},
+        get:function(id){return call('data','todos.get',{id:id});},
+        create:function(opts){return call('data','todos.create',opts||{});},
+        update:function(opts){return call('data','todos.update',opts||{});},
+        toggle:function(opts){return call('data','todos.toggle',opts||{});},
+        delete:function(opts){return call('data','todos.delete',opts||{});},
+        schedule:function(opts){return call('data','todos.schedule',opts||{});},
+        setDescription:function(opts){return call('data','todos.setDescription',opts||{});},
+        setPinned:function(opts){return call('data','todos.setPinned',opts||{});},
+        setRepeat:function(opts){return call('data','todos.setRepeat',opts||{});},
+        setTags:function(opts){return call('data','todos.setTags',opts||{});},
+        completeRecurring:function(opts){return call('data','todos.completeRecurring',opts||{});},
+        undoRecurring:function(opts){return call('data','todos.undoRecurring',opts||{});},
+        expandOccurrences:function(opts){return call('data','todos.expandOccurrences',opts||{});}
+      },
+      todoTags:{
+        list:function(){return call('data','todoTags.list',{});},
+        links:function(){return call('data','todoTags.links',{});},
+        create:function(opts){return call('data','todoTags.create',opts||{});},
+        update:function(opts){return call('data','todoTags.update',opts||{});},
+        delete:function(opts){return call('data','todoTags.delete',opts||{});}
+      },
+      stickies:{
+        list:function(){return call('data','stickies.list',{});},
+        save:function(opts){return call('data','stickies.save',opts||{});}
+      },
+      detachedStickies:{
+        list:function(){return call('data','detachedStickies.list',{});},
+        save:function(opts){return call('data','detachedStickies.save',opts||{});}
+      },
+      resources:{
+        list:function(){return call('data','resources.list',{});},
+        get:function(id){return call('data','resources.get',{id:id});},
+        create:function(opts){return call('data','resources.create',opts||{});},
+        update:function(opts){return call('data','resources.update',opts||{});},
+        delete:function(opts){return call('data','resources.delete',opts||{});}
+      },
+      snippets:{
+        list:function(){return call('data','snippets.list',{});},
+        get:function(id){return call('data','snippets.get',{id:id});},
+        create:function(opts){return call('data','snippets.create',opts||{});},
+        update:function(opts){return call('data','snippets.update',opts||{});},
+        delete:function(opts){return call('data','snippets.delete',opts||{});},
+        togglePin:function(opts){return call('data','snippets.togglePin',opts||{});}
+      },
+      tags:{
+        list:function(){return call('data','tags.list',{});},
+        ofNote:function(noteId){return call('data','tags.ofNote',{noteId:noteId});},
+        create:function(opts){return call('data','tags.create',opts||{});},
+        delete:function(opts){return call('data','tags.delete',opts||{});},
+        setNoteTags:function(opts){return call('data','tags.setNoteTags',opts||{});}
+      }
+    },
+    fs:{
+      saveText:function(name,content){return call('fs','saveText',{name:name,content:content});},
+      saveFile:function(name,base64){return call('fs','saveFile',{name:name,base64:base64});},
+      saveAs:function(name,base64){return call('fs','saveAs',{name:name,base64:base64});}
+    },
+    service:{
+      request:function(path,init){
+        init=init||{};
+        return call('service','request',{path:path,method:init.method,headers:init.headers,body:init.body})
+          .then(function(res){
+            return {
+              status:res.status,
+              headers:res.headers,
+              text:function(){return Promise.resolve(res.body);},
+              json:function(){return Promise.resolve(JSON.parse(res.body));}
+            };
+          });
+      }
+    },
+    theme:{
+      get:function(){return call('theme','get',{});}
+    },
+    // 用系统默认浏览器打开外链。**不走 postMessage 的 call 通道**：
+    // 打开动作由宿主主窗口执行（opener::open），扩展 iframe 自己既拿不到 Tauri 命令，
+    // 也开不了新窗口——wry 在宿主未注册 new_window_req_handler 时对 WebView2 的
+    // NewWindowRequested 直接 SetHandled(true) 拒绝，target="_blank" / window.open 全静默失效。
+    openExternal:function(url){
+      window.parent.postMessage({__xhub:true,type:'open-external',url:String(url||'')},'*');
+      return Promise.resolve();
+    },
+    // 界面与通知：notify 复用宿主右下角通知窗（需 manifest 声明 `notify` 权限）。
+    ui:{
+      notify:function(title,body){return call('ui','notify',{title:String(title||''),body:String(body||'')});}
+    },
+    // 标题栏小部件（需 manifest 声明 `titlebar` 权限，且**仅常驻运行时生效**——宿主侧
+    // 以常驻实例在跑为准，非常驻调用会被静默忽略）。set 推一条 media（媒体控制档）/
+    // status（通用信息档）小部件上主窗标题栏正中，后推者顶掉前者；clear 撤下自己的。
+    // 用户点小部件按钮时宿主发 `titlebar.action` 事件（payload {id}），用 events.on 接；
+    // media 档固定三键的约定 id：previous / play|pause / next
+    titlebar:{
+      set:function(w){return call('titlebar','set',w||{});},
+      clear:function(){return call('titlebar','clear',{});}
+    },
+    // 剪贴板读写（需 manifest 声明 `clipboard` 权限）。readText 在剪贴板为图片/文件等
+    // 非文本内容时返回空串；writeText 写入后进宿主剪贴板历史，超 10MB 拒绝。
+    clipboard:{
+      readText:function(){return call('clipboard','readText',{});},
+      writeText:function(text){return call('clipboard','writeText',{text:String(text==null?'':text)});}
+    },
+    events:{
+      on:function(event,handler){
+        (listeners[event]=listeners[event]||[]).push(handler);
+        return function(){window.xhub.events.off(event,handler);};
+      },
+      off:function(event,handler){
+        var arr=listeners[event];if(!arr)return;
+        var i=arr.indexOf(handler);if(i>=0){arr.splice(i,1);}
+      },
+      emit:function(event,payload){
+        window.parent.postMessage({__xhub:true,type:'xhub-emit',event:event,payload:payload},'*');
+        return Promise.resolve();
+      }
+    },
+    expose:function(method,handler){
+      exposed[method]=handler;
+    }
+  };
+  // 接管页面里的普通外链 <a href="http(s)://…">：点击改为走 openExternal，
+  // 使其同样遵循用户配置的「链接打开方式」（应用内浏览器/系统浏览器）。
+  // capture 阶段注册并阻断传播——扩展自己绑的 click 处理（如 hotsearch bindOpen）
+  // 会再开一次造成双开；锚点/相对路径/非 http(s) 协议不拦，交还扩展页面自身导航。
+  document.addEventListener('click',function(e){
+    var t=e.target;var a=t&&t.closest?t.closest('a[href]'):null;
+    if(!a)return;
+    var href=a.getAttribute('href')||'';
+    if(!/^https?:\/\//i.test(href))return;
+    e.preventDefault();e.stopPropagation();
+    try{window.xhub.openExternal(href);}catch(err){}
+  },true);
+  // 加载即拉取一次主题，确保首帧就与宿主一致
+  call('theme','get',{}).then(applyTheme).catch(function(){});
+})();
+"#;
+
+/// 找到 `tag_open`（如 `<head`）首次出现后，其闭合 `>` 之后的字节位置。
+fn find_tag_end(html: &str, tag_open: &str) -> Option<usize> {
+    let start = html.find(tag_open)?;
+    let rest = &html[start..];
+    let gt = rest.find('>')?;
+    Some(start + gt + 1)
+}
+
+/// 把桥脚本注入 HTML：优先插到 `<head...>` 开始标签之后（head 内第一个元素，
+/// 早于扩展自身脚本执行）；无 head 则插到 `</head>` 前；再退到 body 前；都没有则插到最前。
+pub(crate) fn inject_bridge(html: &str, bridge: &str) -> String {
+    let script = format!("<script>{bridge}</script>");
+    if let Some(pos) = find_tag_end(html, "<head") {
+        return format!("{}{}{}", &html[..pos], script, &html[pos..]);
+    }
+    if let Some(pos) = html.find("</head>") {
+        return format!("{}{}{}", &html[..pos], script, &html[pos..]);
+    }
+    if let Some(pos) = html.find("<body") {
+        return format!("{}{}{}", &html[..pos], script, &html[pos..]);
+    }
+    format!("{script}{html}")
+}
+
+/// 读取某扩展某形态的入口 URL（`xhub-ext` 协议，前端直接作为 iframe src）。
+///
+/// 入口 HTML 由扩展协议在返回时**动态注入桥脚本**，不再写 `<扩展目录>/.xhpack/<surface>.html`：
+/// 入口与扩展目录内的相对资源（Vite 产物的 module script / css）仍同源可加载，
+/// 而开发扩展的源码目录不会被宿主写脏（见 docs/adr/0008-extension-content-origin-isolation.md）。
+#[tauri::command]
+pub fn read_extension_entry(
+    app: tauri::AppHandle,
+    id: String,
+    surface: Option<String>,
+) -> Result<String, String> {
+    // 已装扩展与开发扩展共用同一条解析路径（开发扩展由「我的扩展」登记源码目录）
+    let dir = crate::ext_protocol::resolve_ext_dir(&app, &id)?;
+    let manifest = read_manifest(&dir)?;
+
+    // service 扩展：打开时懒启动后端（探活成功则后续 runtime.info 返回 serviceReady=true）
+    if manifest.runtime == ExtensionRuntime::Service {
+        if !permission_granted(&app, &id, "service:execute") {
+            return Err("PERMISSION_DENIED: 本地后端尚未授权。请在扩展权限设置中确认信任此版本后开启「运行本地后端」".into());
+        }
+        if let Err(e) = crate::service::start_service(&app, &id) {
+            // 不阻断前端加载：前端仍能打开，runtime.info 会返回 serviceReady=false
+            log::warn!("service 扩展 {id} 后端启动失败: {e}");
+        }
+    }
+
+    let surface = surface.unwrap_or_else(|| manifest.kind.clone());
+    let rel = manifest
+        .entry
+        .get(&surface)
+        .or_else(|| manifest.entry.get("view"))
+        .ok_or_else(|| format!("NOT_FOUND: 扩展 {id} 没有 {surface} 入口"))?;
+    let html_path = dir.join(rel);
+    if !html_path.is_file() {
+        log::error!("扩展入口缺失: {id} [{surface}] {}", html_path.display());
+        return Err(format!("NOT_FOUND: 扩展入口不存在（{rel}）"));
+    }
+    let url = crate::ext_protocol::entry_url(&id, rel);
+    log::info!(
+        "扩展入口就绪: {id} [{surface}] dir={} -> {url}",
+        dir.display()
+    );
+    Ok(url)
+}
+
+/// Tauri 窗口 label 只允许字母数字与 `-`/`/`/`:`/`_`；扩展 id 形如反向域名
+/// `com.x-hub.ctool`（含点号），直接作为 label 会报
+/// "Window labels must only include alphanumeric characters"。
+/// 这里用 base64url（字符集恰好∈合法集合，且无填充）编码后拼 `ext-` 前缀，
+/// 前端 `ExtensionWindow.vue` 再解码回真实 id。
+const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn ext_window_label(id: &str) -> String {
+    let bytes = id.as_bytes();
+    let mut out = String::from("ext-");
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b0 = bytes[i] as u32;
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64URL[((n >> 18) & 63) as usize] as char);
+        out.push(B64URL[((n >> 12) & 63) as usize] as char);
+        if i + 1 < bytes.len() {
+            out.push(B64URL[((n >> 6) & 63) as usize] as char);
+        }
+        if i + 2 < bytes.len() {
+            out.push(B64URL[(n & 63) as usize] as char);
+        }
+        i += 3;
+    }
+    out
+}
+
+/// 打开扩展的独立窗口（window 形态）。窗口 label 为 `ext-<id 的 base64url>`，已存在则聚焦复用。
+/// 窗口加载宿主 `index.html`（App.vue 按 `ext-` 前缀路由到 ExtensionWindow），
+/// 内容仍走 iframe + 桥 API，与 view/module 同一条注入链路。
+/// 必须 async：同步命令运行在主线程，会与 WebviewWindow 创建互相阻塞（死锁），
+/// 与 detach_sticky 等建窗命令同一约束。
+#[tauri::command]
+pub async fn open_extension_window(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let label = ext_window_label(&id);
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    // 开发扩展在源码目录、已装扩展在扩展根：一律经 resolve_ext_dir 解析，否则 dev 扩展打不开窗口
+    let dir = crate::ext_protocol::resolve_ext_dir(&app, &id)?;
+    let manifest = read_manifest(&dir)?;
+    let (w, h) = manifest
+        .min_size
+        .as_ref()
+        .map(|m| (m.w.max(360.0), m.h.max(260.0)))
+        .unwrap_or((800.0, 600.0));
+
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(manifest.name)
+        .inner_size(w, h)
+        .min_inner_size(360.0, 260.0)
+        .additional_browser_args(crate::ADDITIONAL_BROWSER_ARGS)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    log::info!("扩展窗口已打开: {id} [{label}] {w}x{h}");
+    Ok(())
+}
+
+/// 在系统文件管理器中打开扩展所在目录（开发调试用：改完代码直接跳过去）。
+///
+/// 目录一律经 `ext_protocol::resolve_ext_dir` 解析——已装扩展 → 扩展根，开发扩展 → 源码目录；
+/// 直接 `extensions_root().join(id)` 会让「我的扩展」里的源码目录打不开（同 `uninstall_extension` 的坑）。
+#[tauri::command]
+pub fn open_extension_dir(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let dir = crate::ext_protocol::resolve_ext_dir(&app, &id)?;
+    let path = dir.to_string_lossy().to_string();
+    crate::process::open_path(&path)?;
+    log::info!("打开扩展目录: {id} → {path}");
+    Ok(path)
+}
+
+/// 卸载扩展：停止其 service 后端进程（如有）并删除扩展目录。
+/// （卸载 UI 在 §12.7 扩展中心补全时接入，此处先落地服务端清理逻辑）
+#[tauri::command]
+pub fn uninstall_extension(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    crate::service::stop_service(&app, &id);
+    let dir = extensions_root(&app)?.join(&id);
+    if !dir.is_dir() {
+        // 开发扩展不在扩展根（源码目录直挂）：明确指路，避免「卸载成功但扩展还在」的困惑
+        let is_dev = app
+            .try_state::<crate::ext_protocol::DevExtensionDirs>()
+            .and_then(|s| s.get(&id))
+            .is_some();
+        if is_dev {
+            return Err(format!(
+                "INVALID_ARGUMENT: {id} 是开发扩展（源码目录直挂），请在「扩展中心 → 我的扩展」中移除"
+            ));
+        }
+        return Err(format!("NOT_FOUND: 扩展 {id} 未安装"));
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    // 共享存储按命名空间 `ext:<id>:` 精确清理（storage/config/permissions 都在扩展
+    // 目录内，已随 remove_dir_all 删除；旧版平铺键无归属，保持原样）
+    let purged = crate::xhub_api::purge_extension_shared_storage(&app, &id);
+    if purged > 0 {
+        log::info!("已清理扩展共享存储: {id}（{purged} 键）");
+    }
+    log::info!("扩展已卸载: {id}");
+    Ok(())
+}
+
+/// 递归复制目录
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let s = entry.path();
+        let d = dst.join(entry.file_name());
+        if s.is_dir() {
+            copy_dir_recursive(&s, &d)?;
+        } else {
+            std::fs::copy(&s, &d)?;
+        }
+    }
+    Ok(())
+}
+
+// ---------- 权限授权（运行时逐项开关） ----------
+
+/// 权限覆盖文件路径：`<扩展目录>/.permissions.json`（只存用户显式关闭的权限，默认授权）
+///
+/// 目录经 `resolve_ext_dir` 解析：开发扩展写源码目录，已装扩展写扩展根。
+/// 用 `extensions_root().join(id)` 会在扩展根下凭空建目录（同 `xhub_api::storage_path` 的坑）。
+fn permissions_path(app: &tauri::AppHandle, ext_id: &str) -> Result<std::path::PathBuf, String> {
+    Ok(crate::ext_protocol::resolve_ext_dir(app, ext_id)?.join(".permissions.json"))
+}
+
+fn read_permission_overrides(app: &tauri::AppHandle, ext_id: &str) -> Map<String, Value> {
+    let path = match permissions_path(app, ext_id) {
+        Ok(p) => p,
+        Err(_) => return Map::new(),
+    };
+    if !path.exists() {
+        return Map::new();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn write_permission_overrides(
+    app: &tauri::AppHandle,
+    ext_id: &str,
+    map: &Map<String, Value>,
+) -> Result<(), String> {
+    let path = permissions_path(app, ext_id)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content =
+        serde_json::to_string_pretty(&Value::Object(map.clone())).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+/// 某权限是否被授予：manifest 声明后默认授权，除非用户显式关闭。
+pub fn permission_granted(app: &tauri::AppHandle, ext_id: &str, perm: &str) -> bool {
+    let overrides = read_permission_overrides(app, ext_id);
+    if perm == "service:execute" {
+        let version = crate::ext_protocol::resolve_ext_dir(app, ext_id).ok()
+            .and_then(|dir| read_manifest(&dir).ok()).map(|m| m.version);
+        return service_execute_granted(
+            &overrides,
+            version.as_deref(),
+            crate::config::load().service_auto_trust,
+        );
+    }
+    overrides
+        .get(perm)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// `service:execute` 是否放行（纯函数，供单测）：
+/// 显式拒绝 > 全局自动信任（`AppConfig.service_auto_trust`，设置 → 扩展）> 逐版本显式信任。
+/// 自动信任只在用户**没有单独关掉**该扩展后端时生效——否则全局开关会覆盖用户的明确选择。
+fn service_execute_granted(
+    overrides: &Map<String, Value>,
+    version: Option<&str>,
+    auto_trust: bool,
+) -> bool {
+    if overrides.get("service:execute").and_then(Value::as_bool) == Some(false) {
+        return false;
+    }
+    auto_trust || service_version_trusted(overrides, version)
+}
+
+fn service_version_trusted(overrides: &Map<String, Value>, version: Option<&str>) -> bool {
+    version.is_some()
+        && overrides.get("service:execute").and_then(Value::as_bool) == Some(true)
+        && version == overrides.get("service:version").and_then(Value::as_str)
+}
+
+/// 查询扩展权限状态：manifest 声明的权限 → 是否授予。
+#[tauri::command]
+pub fn get_extension_permissions(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<HashMap<String, bool>, String> {
+    // 开发扩展在源码目录（extensions_root 下没有它）——必须走 resolve_ext_dir
+    let dir = crate::ext_protocol::resolve_ext_dir(&app, &id)?;
+    let manifest = read_manifest(&dir)?;
+    let overrides = read_permission_overrides(&app, &id);
+    let mut result = HashMap::new();
+    if manifest.runtime == ExtensionRuntime::Service {
+        result.insert("service:execute".into(), permission_granted(&app, &id, "service:execute"));
+    }
+    for p in manifest.permissions {
+        if p == "service:execute" { continue; }
+        let granted = overrides.get(&p).and_then(|v| v.as_bool()).unwrap_or(true);
+        result.insert(p, granted);
+    }
+    Ok(result)
+}
+
+/// 设置扩展某权限开关（仅记录「关闭」项；开启则删除覆盖）。
+#[tauri::command]
+pub fn set_extension_permission(
+    app: tauri::AppHandle,
+    id: String,
+    permission: String,
+    granted: bool,
+) -> Result<(), String> {
+    let mut overrides = read_permission_overrides(&app, &id);
+    let manifest = read_manifest(&crate::ext_protocol::resolve_ext_dir(&app, &id)?)?;
+    if permission == "service:execute" && manifest.runtime == ExtensionRuntime::Service {
+        overrides.insert(permission.clone(), Value::Bool(granted));
+        overrides.insert("service:version".into(), Value::String(manifest.version));
+    } else if !manifest.permissions.contains(&permission) {
+        return Err("INVALID_ARGUMENT: 扩展未声明此权限".into());
+    } else if granted {
+        overrides.remove(&permission);
+    } else {
+        overrides.insert(permission.clone(), Value::Bool(false));
+    }
+    write_permission_overrides(&app, &id, &overrides)?;
+    if !granted && matches!(permission.as_str(), "service:execute" | "network") {
+        crate::service::stop_service(&app, &id);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("extension-permissions-changed", &id);
+    log::info!("扩展权限更新: {id} {permission} granted={granted}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn security_service_requires_explicit_current_version_trust() {
+        assert!(!service_version_trusted(&Map::new(), Some("1.0.0")));
+        let mut permissions = Map::new();
+        permissions.insert("service:execute".into(), Value::Bool(true));
+        assert!(!service_version_trusted(&permissions, None));
+        permissions.insert("service:version".into(), Value::String("1.0.0".into()));
+        assert!(service_version_trusted(&permissions, Some("1.0.0")));
+        assert!(!service_version_trusted(&permissions, Some("1.0.1")));
+        permissions.insert("service:execute".into(), Value::Bool(false));
+        assert!(!service_version_trusted(&permissions, Some("1.0.0")));
+    }
+
+    #[test]
+    fn service_auto_trust_grants_untrusted_but_never_overrides_explicit_deny() {
+        // 自动信任关（默认）：维持逐版本显式信任的老口径
+        assert!(!service_execute_granted(&Map::new(), Some("1.0.0"), false));
+        // 自动信任开：新装/未授权/更新版本一律放行
+        assert!(service_execute_granted(&Map::new(), Some("1.0.0"), true));
+        assert!(service_execute_granted(&Map::new(), None, true));
+        // 显式拒绝优先：用户单独关掉该扩展后端时，全局开关不得越过
+        let mut denied = Map::new();
+        denied.insert("service:execute".into(), Value::Bool(false));
+        assert!(!service_execute_granted(&denied, Some("1.0.0"), true));
+        // 版本过期但自动信任开 → 仍放行（这正是「更新后不再逐个去授权」的语义）
+        let mut stale = Map::new();
+        stale.insert("service:execute".into(), Value::Bool(true));
+        stale.insert("service:version".into(), Value::String("0.9.0".into()));
+        assert!(!service_execute_granted(&stale, Some("1.0.0"), false));
+        assert!(service_execute_granted(&stale, Some("1.0.0"), true));
+    }
+
+    fn write_manifest(root: &Path, id: &str, manifest: serde_json::Value) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bridge_script_covers_all_data_capabilities() {
+        // 桥脚本的 data 封装必须覆盖全部 data.* 能力：扩展按 window.xhub.data.* 编程，
+        // 桥漏方法 = 能力形同虚设。新增 data 能力时同步桥脚本（或让扩展走 xhub.call）。
+        for cap in crate::xhub_api::CAPABILITIES.iter() {
+            if cap.namespace != "data" {
+                continue;
+            }
+            let needle = format!("'{}','{}'", cap.namespace, cap.method);
+            assert!(
+                XHUB_BRIDGE_SCRIPT.contains(&needle),
+                "桥脚本缺少 data 能力封装: {}.{}",
+                cap.namespace,
+                cap.method
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_script_covers_clipboard_capabilities() {
+        // 剪贴板同 data 的契约：扩展按 window.xhub.clipboard.* 编程，桥漏方法 = 能力形同虚设
+        for cap in crate::xhub_api::CAPABILITIES.iter() {
+            if cap.namespace != "clipboard" {
+                continue;
+            }
+            let needle = format!("'{}','{}'", cap.namespace, cap.method);
+            assert!(
+                XHUB_BRIDGE_SCRIPT.contains(&needle),
+                "桥脚本缺少 clipboard 能力封装: {}",
+                cap.method
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_script_covers_shared_storage_capabilities() {
+        // 共享存储同 data/clipboard 的契约：新增能力（如 getFrom）必须同步桥脚本，
+        // 否则能力表里有、扩展调不到（`window.xhub.sharedStorage.getFrom is not a function`）
+        for cap in crate::xhub_api::CAPABILITIES.iter() {
+            if cap.namespace != "sharedStorage" {
+                continue;
+            }
+            let needle = format!("'{}','{}'", cap.namespace, cap.method);
+            assert!(
+                XHUB_BRIDGE_SCRIPT.contains(&needle),
+                "桥脚本缺少 sharedStorage 能力封装: {}",
+                cap.method
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_script_covers_titlebar_capabilities() {
+        // 标题栏小部件同上：能力表与桥封装必须同步，扩展才有 window.xhub.titlebar.* 可用
+        for cap in crate::xhub_api::CAPABILITIES.iter() {
+            if cap.namespace != "titlebar" {
+                continue;
+            }
+            let needle = format!("'{}','{}'", cap.namespace, cap.method);
+            assert!(
+                XHUB_BRIDGE_SCRIPT.contains(&needle),
+                "桥脚本缺少 titlebar 能力封装: {}",
+                cap.method
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_script_intercepts_external_anchors() {
+        // 普通外链 <a href="http(s)://…"> 必须走 openExternal（遵循「链接打开方式」设置）：
+        // capture 阶段接管 + preventDefault/stopPropagation（阻断扩展自身处理器，防双开）；
+        // 正则须是单反斜杠的 \/ 转义（桥是 r#""# 原始字符串，双反斜杠会写坏正则炸掉整个桥）
+        assert!(XHUB_BRIDGE_SCRIPT.contains("addEventListener('click'"));
+        assert!(XHUB_BRIDGE_SCRIPT.contains("e.preventDefault();e.stopPropagation();"));
+        assert!(XHUB_BRIDGE_SCRIPT.contains("/^https?:\\/\\//i.test(href)"));
+        assert!(XHUB_BRIDGE_SCRIPT.contains("window.xhub.openExternal(href)"));
+    }
+
+    #[test]
+    fn bridge_script_maps_all_theme_tokens() {
+        // 主题令牌三处必须同步：themeTokens.ts 采集 → 桥脚本写成 --xhub-* 变量 → 扩展 CSS 引用。
+        // 漏一个 = 扩展拿到空变量、样式悄然不对（不报错，只有肉眼能发现）——新增令牌时同步这三处。
+        // --xhub-page-bg 是扩展「页面底」专用令牌：无壁纸 = 宿主整页背景，有壁纸 = transparent
+        // （拿 --xhub-bg-page 铺底会把壁纸整块盖住，透底态还会变成白底白字）。
+        for name in [
+            "--xhub-accent",
+            "--xhub-brand",
+            "--xhub-brand-soft",
+            "--xhub-bg-page",
+            "--xhub-page-bg",
+            "--xhub-bg-card",
+            "--xhub-surface",
+            "--xhub-text-1",
+            "--xhub-text-2",
+            "--xhub-text-3",
+            "--xhub-border",
+            "--xhub-red",
+            "--xhub-green",
+            "--xhub-yellow",
+            "--xhub-blue",
+            "--xhub-orange",
+            "--xhub-radius-lg",
+        ] {
+            assert!(
+                XHUB_BRIDGE_SCRIPT.contains(name),
+                "桥脚本缺少主题令牌映射: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_web_manifest() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.apidebug",
+            serde_json::json!({
+                "id": "com.x-hub.apidebug",
+                "name": "API 调试助手",
+                "version": "1.0.0",
+                "runtime": "web",
+                "kind": "view",
+                "surfaces": ["module", "view"],
+                "openIn": ["view", "window"],
+                "entry": { "view": "./app/index.js" },
+                "permissions": ["clipboard"],
+                "icon": "./icon.svg"
+            }),
+        );
+
+        let entry = load_extension(&dir.path().join("com.x-hub.apidebug"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        assert_eq!(entry.id, "com.x-hub.apidebug");
+        assert_eq!(entry.name, "API 调试助手");
+        assert_eq!(entry.runtime, "web");
+        assert_eq!(entry.kind, "view");
+        assert_eq!(entry.surfaces, vec!["module", "view"]);
+        assert_eq!(entry.open_in, vec!["view", "window"]);
+        assert_eq!(entry.permissions, vec!["clipboard"]);
+    }
+
+    /// 回归（v0.6.2）：`entry.dir` 与 `dev_mode_status().path` 必须同口径**归一**——
+    /// 前端「我的扩展」靠这两个字符串匹配「哪条直挂目录对应哪个已加载扩展」
+    /// （`devEntryFor` → `canPublish`），一边带 `\\?\` 一边不带就会出现
+    /// 「扩展明明在跑、发布按钮却不见了」。同时也锁住喂给 Node 的脚本路径不带前缀。
+    #[test]
+    fn dev_entry_dir_matches_normalized_config_path() {
+        let root = tempdir().unwrap();
+        write_manifest(
+            root.path(),
+            "com.x-hub.devprobe",
+            serde_json::json!({
+                "id": "com.x-hub.devprobe",
+                "name": "直挂探针",
+                "version": "1.0.0",
+                "runtime": "web",
+                "kind": "view",
+                "surfaces": ["view"],
+                "entry": { "view": "./index.html" }
+            }),
+        );
+        // 模拟「添加源码目录」的落盘形态：目录经 canonicalize（Windows 上带 verbatim 前缀）
+        let canon = root.path().join("com.x-hub.devprobe").canonicalize().unwrap();
+        if cfg!(windows) {
+            assert!(
+                canon.to_string_lossy().starts_with(r"\\?\"),
+                "前提不成立：Windows 的 canonicalize 应当返回 verbatim 形式"
+            );
+        }
+        let entry = load_extension(&canon, SOURCE_DEV);
+        assert!(!entry.invalid);
+        assert_eq!(
+            entry.dir,
+            crate::paths::simplify_existing(&canon).to_string_lossy()
+        );
+        assert!(!entry.dir.contains(r"\\?\"));
+    }
+
+    #[test]
+    fn parses_service_manifest_with_backend() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.dsh",
+            serde_json::json!({
+                "id": "com.x-hub.dsh",
+                "name": "DeepSeek Harness",
+                "version": "0.1.1",
+                "runtime": "service",
+                "kind": "view",
+                "surfaces": ["view"],
+                "openIn": ["view", "window"],
+                "entry": { "view": "./entry/index.html" },
+                "backend": {
+                    "entry": "./service/index.js",
+                    "engine": { "type": "node", "minVersion": "22" },
+                    "cwd": "./service",
+                    "port": 0,
+                    "health": "/healthz"
+                },
+                "permissions": ["network", "fs", "process"]
+            }),
+        );
+
+        let entry = load_extension(&dir.path().join("com.x-hub.dsh"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        assert_eq!(entry.runtime, "service");
+
+        // 直接解析 manifest，校验 backend 字段
+        let raw = std::fs::read_to_string(dir.path().join("com.x-hub.dsh/manifest.json")).unwrap();
+        let manifest: ExtensionManifest = serde_json::from_str(&raw).unwrap();
+        let backend = manifest.backend.unwrap();
+        assert_eq!(backend.entry, "./service/index.js");
+        assert_eq!(backend.port, Some(0));
+        assert_eq!(backend.health.as_deref(), Some("/healthz"));
+        let engine = backend.engine.unwrap();
+        assert_eq!(engine.engine_type, "node");
+        assert_eq!(engine.min_version.as_deref(), Some("22"));
+    }
+
+    #[test]
+    fn runtime_defaults_to_web_and_kind_to_view() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.minimal",
+            serde_json::json!({
+                "id": "com.x-hub.minimal",
+                "name": "最小扩展",
+                "version": "0.0.1"
+            }),
+        );
+
+        let raw = std::fs::read_to_string(dir.path().join("com.x-hub.minimal/manifest.json")).unwrap();
+        let manifest: ExtensionManifest = serde_json::from_str(&raw).unwrap();
+        assert_eq!(manifest.runtime, ExtensionRuntime::Web);
+        assert_eq!(manifest.kind, "view");
+        // 未声明 moduleVariants → 空
+        assert!(manifest.module_variants.is_empty());
+        // 未声明 moduleOptions → None（扩展卡默认不显示宿主表头）
+        assert_eq!(manifest.module_options.default_hide_title, None);
+    }
+
+    #[test]
+    fn parses_module_options_default_hide_title() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.clock-mini",
+            serde_json::json!({
+                "id": "com.x-hub.clock-mini",
+                "name": "迷你时钟",
+                "version": "0.1.0",
+                "kind": "module",
+                "surfaces": ["module"],
+                "entry": { "module": "./module/index.html" },
+                "moduleOptions": { "defaultHideTitle": false }
+            }),
+        );
+
+        let entry = load_extension(&dir.path().join("com.x-hub.clock-mini"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        // 写了 false = 作者要宿主默认显示表头
+        assert_eq!(entry.module_options.default_hide_title, Some(false));
+    }
+
+    #[test]
+    fn parses_titlebar_options_position() {
+        // 合法取值归一进 Entry；非法取值与未声明一样回 None（前端按居中兜底，用户显式设置优先）
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.player",
+            serde_json::json!({
+                "id": "com.x-hub.player",
+                "name": "播放器",
+                "version": "0.1.0",
+                "titlebarOptions": { "position": "left" }
+            }),
+        );
+        let entry = load_extension(&dir.path().join("com.x-hub.player"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        assert_eq!(entry.titlebar_position.as_deref(), Some("left"));
+
+        write_manifest(
+            dir.path(),
+            "com.x-hub.player",
+            serde_json::json!({
+                "id": "com.x-hub.player",
+                "name": "播放器",
+                "version": "0.1.0",
+                "titlebarOptions": { "position": "top" }
+            }),
+        );
+        let entry = load_extension(&dir.path().join("com.x-hub.player"), SOURCE_INSTALLED);
+        assert_eq!(entry.titlebar_position, None);
+
+        // 纯函数边界：缺省 / 空 / 非法都回 None
+        assert_eq!(titlebar_position_of(None), None);
+        assert_eq!(titlebar_position_of(Some(&TitlebarOptions::default())), None);
+        assert_eq!(
+            titlebar_position_of(Some(&TitlebarOptions {
+                position: Some("right".into())
+            })),
+            Some("right".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_module_variants() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.calendar",
+            serde_json::json!({
+                "id": "com.x-hub.calendar",
+                "name": "日历",
+                "version": "0.2.0",
+                "kind": "module",
+                "surfaces": ["module", "view"],
+                "entry": {
+                    "module": "./module/index.html",
+                    "view": "./view/index.html"
+                },
+                "moduleVariants": [
+                    { "id": "compact", "name": "紧凑", "minW": 2, "minH": 2, "idealW": 2, "idealH": 2 },
+                    { "id": "month", "name": "整月", "minW": 4, "minH": 4, "idealW": 5, "idealH": 5 }
+                ]
+            }),
+        );
+
+        let entry = load_extension(&dir.path().join("com.x-hub.calendar"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        assert_eq!(entry.module_variants.len(), 2);
+        assert_eq!(entry.module_variants[0].id, "compact");
+        assert_eq!(entry.module_variants[0].min_w, 2);
+        assert_eq!(entry.module_variants[0].ideal_h, 2);
+        assert_eq!(entry.module_variants[1].name, "整月");
+        assert_eq!(entry.module_variants[1].min_w, 4);
+    }
+
+    #[test]
+    fn broken_manifest_is_invalid_not_panic() {
+        let dir = tempdir().unwrap();
+        let ext = dir.path().join("com.x-hub.broken");
+        std::fs::create_dir_all(&ext).unwrap();
+        std::fs::write(ext.join("manifest.json"), "not valid json {{{").unwrap();
+
+        let entry = load_extension(&ext, SOURCE_INSTALLED);
+        assert!(entry.invalid);
+        assert!(entry.error.is_some());
+        assert_eq!(entry.id, "com.x-hub.broken");
+    }
+
+    #[test]
+    fn missing_manifest_is_invalid() {
+        let dir = tempdir().unwrap();
+        let ext = dir.path().join("com.x-hub.nomanifest");
+        std::fs::create_dir_all(&ext).unwrap();
+
+        let entry = load_extension(&ext, SOURCE_INSTALLED);
+        assert!(entry.invalid);
+        assert!(entry.error.unwrap().contains("manifest.json"));
+    }
+
+    #[test]
+    fn inject_bridge_inserts_before_head() {
+        let html = "<html><head><title>t</title></head><body>x</body></html>";
+        let out = inject_bridge(html, "BRIDGE");
+        assert!(out.contains("<script>BRIDGE</script>"));
+        assert!(out.find("<script>").unwrap() < out.find("<title>").unwrap());
+        assert!(out.ends_with("</head><body>x</body></html>"));
+    }
+
+    #[test]
+    fn inject_bridge_without_head_prepends() {
+        let html = "<body>hi</body>";
+        let out = inject_bridge(html, "BRIDGE");
+        assert!(out.starts_with("<script>BRIDGE</script>"));
+    }
+
+    #[test]
+    fn condition_matches_platform() {
+        let cond = DisableCondition {
+            platform: Some("windows".to_string()),
+        };
+        assert_eq!(condition_matches(&cond), cfg!(target_os = "windows"));
+        let empty = DisableCondition { platform: None };
+        assert!(!condition_matches(&empty));
+    }
+
+    #[test]
+    fn load_extension_computes_requires_and_disabled() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "com.x-hub.caps",
+            serde_json::json!({
+                "id": "com.x-hub.caps",
+                "name": "能力探测",
+                "version": "1.0.0",
+                "requires": ["data.notes.list", "data.chat.list"],
+                "dependsOn": ["com.x-hub.other"],
+                "disabled": { "platform": "not-a-real-os" }
+            }),
+        );
+
+        let entry = load_extension(&dir.path().join("com.x-hub.caps"), SOURCE_INSTALLED);
+        assert!(!entry.invalid);
+        // data.notes.list 已实现 → 不缺失
+        assert!(!entry.missing_capabilities.contains(&"data.notes.list".to_string()));
+        // data.chat.list 未实现 → 缺失
+        assert!(entry.missing_capabilities.contains(&"data.chat.list".to_string()));
+        // platform 不匹配 → 不禁用
+        assert!(!entry.disabled);
+        // dependsOn 原样记录（缺失依赖在 scan_extensions 后处理）
+        assert_eq!(entry.depends_on, vec!["com.x-hub.other".to_string()]);
+    }
+
+    #[test]
+    fn ext_window_label_is_valid_and_roundtrips() {
+        // 窗口 label 只允许字母数字与 -/_ 等字符；扩展 id 含点号，必须可逆编码
+        let cases = ["com.x-hub.ctool", "com.x-hub.hello-service", "abc", "windows"];
+        for id in cases {
+            let label = ext_window_label(id);
+            assert!(label.starts_with("ext-"), "label={label} id={id}");
+            let stripped = &label["ext-".len()..];
+            assert!(
+                !stripped.is_empty()
+                    && stripped
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/' || c == ':'),
+                "invalid chars in label={label} id={id}"
+            );
+        }
+        assert_eq!(ext_window_label("com.x-hub.ctool"), "ext-Y29tLngtaHViLmN0b29s");
+        // 同一 id 编码稳定
+        assert_eq!(ext_window_label("com.x-hub.ctool"), ext_window_label("com.x-hub.ctool"));
+    }
+}

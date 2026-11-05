@@ -1,0 +1,220 @@
+# manifest.json 规范
+
+> **何时读我**：写/改 `manifest.json` 时。**本表已列全所有字段，不需要访问宿主源码**（读者手里也没有）。
+
+`manifest.json` 位于扩展目录**根**。字段名**区分大小写**——`openIn`、`minSize`、`dependsOn`、`backend.engine.minVersion` 是驼峰，写错会解析失败。文件必须是**合法 JSON**（不能带注释）。
+
+## 必填
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 反向域名——**用你自己的**，如 `com.yourname.weather`。安装目录、市场条目、`dependsOn` 都按它认人。**格式硬规则**：≤128 字符、**必须含 `.`**、只允许小写字母 / 数字 / `.` / `_` / `-`（**不能有大写**）、不以 `.` 开头、不含 `..`。⚠️ **`com.x-hub.*` 是平台保留命名空间**（只给官方自营扩展），第三方用它会在服务端关卡被拒；本地预检只提示不拦，容易一路拖到上传才发现 |
+| `name` | 展示名 |
+| `version` | **必须是 `x.y.z` 三段纯数字**（如 `0.1.0`）。预检按这个格式卡：`1.0`、`v1.0.0`、`1.0.0-beta` 一律判为不合法（报「版本号不是 x.y.z 形式」），发布会被拒 |
+
+## 运行时与形态
+
+| 字段 | 类型 | 默认 |
+|---|---|---|
+| `runtime` | `"web"` \| `"service"` | `web` |
+| `kind` | `"module"` \| `"view"` \| `"window"` \| `"drawer"` | `view` |
+| `surfaces` | string[] | `[]` |
+| `openIn` | string[] | `[]` |
+
+## 入口与资源
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `entry` | `{ [surface]: string }` | 各形态入口，**值统一是 HTML 文件**（相对扩展目录） |
+| `icon` | string | 图标（相对路径，SVG 或 PNG）。**必须自带配色**：宿主经 `<img>` 渲染图标，SVG 的 `currentColor` 会回落为纯黑，暗色主题/壁纸态看不清——用「品牌色圆角方块底 + 白/浅色字形」或中高明度字形，别交付纯黑/纯白透明底图标（见 pitfalls 24） |
+| `minSize` | `{ w, h }` | window / drawer 建议尺寸 |
+| `description` | string | 一句话描述 |
+| `author` | string | 作者署名。市场卡片与详情页会展示它；没填会显示占位符「—」。发布弹窗里也能补填（会写回 manifest.json），但推荐生成时就填好 |
+| `category` | string | 可选，市场分类。固定七类：`AI` / `实用工具` / `开发工具` / `多媒体` / `休闲游戏` / `学习天地` / `其他`（其它自定义取值会原样展示、在分类筛选里追加在七类之后）；发布弹窗里也能补选（会写回 manifest.json）；不填按「其他」归类 |
+
+**每个声明的 entry 都必须有真实文件**，否则扩展打不开。
+
+## 权限 `permissions`
+
+可选值：`data:read`、`data:write`、`fs`、`clipboard`（读写系统剪贴板文本）、`network`、`open-url`（用默认浏览器打开外链）、`system`（保留，宿主暂无对应能力）、`notify`（推送右下角通知）、`events`（广播自定义事件）、`shared-storage`（扩展共享存储：`get/set/remove` 由宿主自动放进 `ext:<扩展 id>:` 命名空间，跨扩展读取用 `getFrom(ownerId, key)`，见 bridge-api.md）、`titlebar`（在主窗标题栏推 media/status 小部件，**仅常驻运行时展示**，见 bridge-api.md 的 `titlebar.*` 节）。
+
+没声明就调用会被拒（`PERMISSION_DENIED`）。各权限与桥 API 的对应关系见 `bridge-api.md`。
+
+⚠️ **`network` 是个例外**：它当前**不对应任何可用的桥 API**（`net.fetch` 还是 planned），唯一生效点是 **service 后端对外监听**（`backend.host` 非回环）。普通扩展不需要它。
+
+## 依赖与条件
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `requires` | string[] | 依赖的宿主能力，写 `namespace.method`（如 `data.notes.list`）；宿主未实现则扩展中心标「缺能力」 |
+| `dependsOn` | string[] | 依赖的其它扩展 id；未安装则扩展中心标「缺依赖」、点击打开前拦截 |
+| `disabled` | `{ platform: string }` | 条件禁用：`platform` 匹配当前系统（`windows` / `macos` / `linux`）则扩展被禁用 |
+
+⚠️ `requires` 写的是**能力名**（`data.notes.list`），不是**权限名**（`data:read`）。写错会在扩展中心标「缺能力」。
+
+## 跨扩展协作
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `expose` | string[] | 暴露给其它扩展调用的方法名；本扩展内用 `xhub.expose(method, fn)` 注册，其它扩展用 `xhub.runtime.callExtension(id, method, payload)` 调用 |
+| `actions` | `{ id, title, surface }[]` | 快捷动作：扩展中心每个扩展行会渲染动作按钮，点击打开对应形态 |
+| `config` | `{ [key]: any }` | **作者默认配置**。用户在扩展设置里改的值写在扩展目录的 `.config.json`（覆盖优先、升级扩展不冲掉）；扩展侧只用 `xhub.config.*` 读写，**别自己读配置文件** |
+
+## AI 助手工具 `agent.tools`（仅 service 扩展）
+
+让内置 AI 助手能查你的数据、调你的功能。**宿主不知道扩展里有什么**——靠扩展在 manifest 里自描述：
+每条声明告诉模型「我叫什么、什么时候该调我、参数长什么样、返回长什么样」，宿主聚合后经
+`extension_tool_list` / `extension_tool_call` 两个内置 Agent 工具暴露给模型。
+
+```jsonc
+{
+  "runtime": "service",
+  "agent": {
+    "tools": [
+      {
+        "name": "list_orders",                  // 扩展内唯一，[a-z0-9_-]
+        "description": "查询用户的订单列表，可按状态过滤",  // 模型判断何时调用的唯一依据，写清用途与返回内容
+        "level": "read",                        // read（默认）/ write / dangerous —— AI 审批档
+        "parameters": {                         // JSON Schema（缺省 = 无参）
+          "type": "object",
+          "properties": {
+            "status": { "type": "string", "description": "pending / done" }
+          }
+        },
+        "returns": "{ orders: [{ id, title, status }] }"  // 可选：返回形状说明，帮模型免试调
+      }
+    ]
+  }
+}
+```
+
+约定与铁律：
+
+- **仅 `runtime: "service"` 可声明**：后端由宿主托管常驻，AI 随时可调；web 扩展的页面没打开就无人应答，不支持。
+- **后端实现一个固定端点**：`POST /xhub/agent-tool`，body `{"tool": "...", "args": {...}}`（请求头带 `X-XHub-Ext-Id` 供日志溯源），**2xx 响应体（任意 JSON）就是工具结果**；非 2xx 时把原因写进 body 的 `error` 或 `message` 字段。写法见 `service.md`。
+- **`level` 是给 AI 的审批档，与 `permissions` 是两套体系**：`read` 只读模式可用；`write`/`dangerous` 会被宿主弹卡向用户确认（会话内可「允许一次/一直允许」）。按真实影响声明——「删数据」标 read 等于让 AI 免确认删数据。
+- **响应体上限 256 KB**：大清单在工具内分页/截断，超限直接报错。
+- 用户可以在 设置 → AI 助手 关总开关，或在扩展设置的「AI 助手」区块单独关掉本扩展；不合格的声明（空描述/非法字符/越档 level）宿主会跳过并在日志里说明。
+- `description` 与 `returns` 会原文进模型上下文：别塞密钥等敏感内容，也别写营销话术。
+
+## service 专属 `backend`
+
+仅 `runtime: "service"` 时使用。
+
+| 字段 | 说明 |
+|---|---|
+| `entry` | 后端入口（如 `./service/index.js`） |
+| `engine` | `{ type: "node", minVersion: "24" }` |
+| `cwd` | 后端工作目录（相对路径，可选） |
+| `port` | `0` = 动态分配（推荐）；固定端口需冲突检测 |
+| `host` | 监听主机。缺省 / `127.0.0.1` / `::1` / `localhost` = **仅本机（安全默认）**；写 `0.0.0.0` 或局域网地址 = **对外开服务**，此时**必须**声明 `network` 权限且用户未关闭该权限，否则宿主拒绝启动后端（`PERMISSION_DENIED`），发布预检也会报「对外监听却没有申请 network 权限」 |
+| `health` | 健康检查路径（如 `/healthz`，可选） |
+
+> **`network` 权限只在上面这一种情况需要**（后端对外监听）。后端自己发外部 HTTP 请求、前端走 `service.request` 都是自由的，**不要**顺手声明 `network`——授权提示会多一项，用户会问为什么。
+
+## 工作台模块多形态 `moduleVariants`
+
+可选，仅对 `module` 形态有效。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 形态 id（小写、无空格，唯一） |
+| `name` | 形态名（编辑器形态芯片 / 切换浮层展示用） |
+| `minW` / `minH` | 内容完整展示的最小格子（2–15） |
+| `idealW` / `idealH` | 内容正好铺满的推荐格子（≥ min） |
+
+声明后 module 卡片在工作台自定义布局里以多个形态注册：编辑器「先选形态再拖入」、切换浮层、最小尺寸钳制、填充适配徽标全生效（与内置时钟/天气一致）。未声明则只有一个默认形态（min 2×2 / ideal 4×3）。
+
+各形态**共用 `entry.module` 的同一份 HTML**，扩展在运行时按当前形态渲染不同内容——取形态的方式见 `surfaces.md`。
+
+## 工作台模块选项 `moduleOptions`
+
+可选，仅对 `module` 形态有效。
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `defaultHideTitle` | boolean | 不写 | 作者声明这张卡**默认要不要宿主表头**。**不写 = 默认不显示表头**（扩展卡默认没有表头，卡面完全由扩展自己画）；写 `false` = 宿主默认在卡片顶部渲染表头（品牌色图标 + `manifest.name`）。用户在布局编辑器里用「Aa」可按卡片单独覆盖（用户设置优先），这里只是初值 |
+
+- 绝大多数摘要卡**什么都不用写**（默认无表头）。只有想让宿主帮你画标题栏时才写 `"moduleOptions": { "defaultHideTitle": false }`，此时卡名 = `manifest.name`，卡面自己别再画一遍标题。
+- 表头本身占一行高度（约 30px），声明与否会改变入口 iframe 的可用高度——入口一律按 `height: 100%` 自适应，别按像素估算。
+
+## 标题栏小部件选项 `titlebarOptions`
+
+可选；对声明了 `titlebar` 权限、会推标题栏小部件（`xhub.titlebar.set`，见 bridge-api.md）的扩展有意义。
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `position` | `"left"` \| `"center"` \| `"right"` | `center` | 小部件的**默认显示位**（作者默认）：左 / 中 / 右。用户在 设置 → 外观「标题栏小部件」里的显式选择优先于它；非法取值按未声明处理（居中） |
+
+- 宿主标题栏最多同显 3 条（三个位各一条），**同一位置后推的扩展顶掉先推的**——多个扩展都用缺省居中会互相顶掉。按扩展性质声明默认位可减少同位竞争：媒体控制类建议 `left`，状态/信息类建议 `right`。
+- 运行期 `xhub.titlebar.set` **不携带位置**——落位只由「用户显式设置 > manifest 默认 > 居中」决定。
+
+```jsonc
+{ "titlebarOptions": { "position": "left" } }
+```
+
+## 示例
+
+### web 扩展
+
+```json
+{
+  "id": "com.example.weather",
+  "name": "天气卡片",
+  "version": "1.0.0",
+  "runtime": "web",
+  "kind": "view",
+  "surfaces": ["module", "view"],
+  "openIn": ["view"],
+  "entry": {
+    "module": "./module/index.html",
+    "view": "./view/index.html"
+  },
+  "permissions": ["data:read"],
+  "icon": "./icon.svg",
+  "description": "在工作台显示实时天气"
+}
+```
+
+### service 扩展
+
+```json
+{
+  "id": "com.example.news",
+  "name": "新闻聚合",
+  "version": "0.1.0",
+  "runtime": "service",
+  "kind": "view",
+  "surfaces": ["view"],
+  "openIn": ["view", "window"],
+  "entry": { "view": "./view/index.html" },
+  "backend": {
+    "entry": "./service/index.js",
+    "engine": { "type": "node", "minVersion": "24" },
+    "cwd": "./service",
+    "port": 0,
+    "health": "/healthz"
+  },
+  "permissions": [],
+  "icon": "./icon.svg",
+  "description": "聚合多个信息源"
+}
+```
+
+> 注意这里**没有** `network`：后端默认只监听回环，它自己去抓取外部数据不受权限管辖。只有 `backend.host` 写成对外地址时才需要加 `network`。
+
+### module 多形态
+
+```json
+{
+  "id": "com.example.calendar",
+  "name": "日历",
+  "kind": "module",
+  "surfaces": ["module", "view"],
+  "entry": { "module": "./module/index.html", "view": "./view/index.html" },
+  "moduleVariants": [
+    { "id": "compact", "name": "紧凑", "minW": 2, "minH": 2, "idealW": 2, "idealH": 2 },
+    { "id": "month",   "name": "整月", "minW": 4, "minH": 4, "idealW": 5, "idealH": 5 }
+  ]
+}
+```

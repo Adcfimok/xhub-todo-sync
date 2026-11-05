@@ -1,0 +1,76 @@
+/**
+ * 浏览器预览用的假桥：让 view/module 页面脱离 x-hub 也能跑起来。
+ * 只用于本地调试与截图，不随扩展发布。
+ */
+(function () {
+  'use strict'
+  var BASE = 'http://127.0.0.1:47821'
+  var seq = 0
+  var todos = [
+    { id: 1, title: '写周报', done: 0, priority: 1, due_at: Date.now() + 3600e3, version: 0, description: '', pinned: 0, repeat_mode: 'once', created_at: '2026-11-05 09:00:00.000', updated_at: '2026-11-05 09:00:00.000' },
+    { id: 2, title: '买牛奶', done: 0, priority: 0, due_at: Date.now() + 86400e3, version: 0, description: '', pinned: 0, repeat_mode: 'once', created_at: '2026-11-05 09:10:00.000', updated_at: '2026-11-05 09:10:00.000' },
+    { id: 3, title: '交房租', done: 0, priority: 2, due_at: Date.now() - 86400e3, version: 0, description: '', pinned: 0, repeat_mode: 'monthly', created_at: '2026-11-01 09:00:00.000', updated_at: '2026-11-01 09:00:00.000' },
+    { id: 4, title: '读完《设计系统》', done: 1, priority: 0, due_at: null, version: 0, description: '', pinned: 0, repeat_mode: 'once', created_at: '2026-11-02 09:00:00.000', updated_at: '2026-11-02 09:00:00.000' }
+  ]
+
+  function find(id) { return todos.filter(function (t) { return t.id === Number(id) })[0] }
+
+  window.xhub = {
+    runtime: {
+      info: async function () { return { id: 'com.zhou.todo-relay', runtime: 'service', serviceReady: true, capabilities: [] } },
+      open: function () { console.log('[mock] open', arguments[0]) },
+      callExtension: async function () { return null }
+    },
+    data: {
+      todos: {
+        list: async function () { return todos.slice() },
+        get: async function (id) { return find(id) },
+        create: async function (a) {
+          var t = { id: ++seq + 100, title: a.title, done: 0, priority: 0, due_at: null, version: 0, description: '', pinned: 0, repeat_mode: 'once', created_at: '2026-11-05 11:00:00.000', updated_at: '2026-11-05 11:00:00.000', parent_id: a.parentId || null }
+          todos.push(t); return t
+        },
+        update: async function (a) { var t = find(a.id); if (t) { t.title = a.title; t.priority = a.priority; t.version++; t.updated_at = nowStr() } return t },
+        toggle: async function (a) { var t = find(a.id); if (t) { t.done = t.done ? 0 : 1; t.version++; t.updated_at = nowStr() } return t },
+        schedule: async function (a) { var t = find(a.id); if (t) { t.due_at = a.dueAt; t.version++; t.updated_at = nowStr() } return t },
+        setDescription: async function (a) { var t = find(a.id); if (t) { t.description = a.description; t.version++ } return t },
+        setPinned: async function (a) { var t = find(a.id); if (t) { t.pinned = a.pinned ? 1 : 0; t.version++ } return t },
+        delete: async function (a) { todos = todos.filter(function (t) { return t.id !== Number(a.id) }); return { ok: true } }
+      }
+    },
+    service: {
+      request: async function (path, init) {
+        var r = await fetch(BASE + path, init || {})
+        var text = await r.text()
+        return { status: r.status, headers: {}, text: async function () { return text }, json: async function () { return JSON.parse(text) } }
+      }
+    },
+    config: { get: async function (k, d) { return d === undefined ? null : d }, all: async function () { return {} }, set: async function () {}, remove: async function () {} },
+    storage: { get: async function () { return null }, set: async function () {}, remove: async function () {}, clear: async function () {} },
+    ui: { notify: async function (a, b) { console.log('[mock notify]', a, b) }, toast: function () {} },
+    events: { on: function () { return function () {} }, emit: function () {} },
+    theme: { get: async function () { return { mode: 'dark' } } },
+    openPermissions: function () { console.log('[mock] openPermissions') },
+    openExternal: function (u) { console.log('[mock] openExternal', u) },
+    fs: { saveText: async function () { return {} } }
+  }
+
+  function nowStr() {
+    var d = new Date()
+    var p = function (n) { return String(n).padStart(2, '0') }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+      p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.000'
+  }
+
+  // 预览时按 URL 参数切主题，模拟宿主注入
+  var q = new URLSearchParams(location.search)
+  var theme = q.get('theme') || 'dark'
+  document.documentElement.setAttribute('data-xhub-theme', theme)
+  document.documentElement.style.setProperty(
+    '--xhub-page-bg',
+    theme === 'light'
+      ? 'radial-gradient(1200px 800px at 12% -8%, rgba(91,91,245,.12), transparent 55%), linear-gradient(150deg,#eef1fa 0%,#f7f3ec 100%)'
+      : 'radial-gradient(1200px 800px at 12% -8%, rgba(139,139,255,.16), transparent 55%), linear-gradient(150deg,#14151d 0%,#101018 100%)'
+  )
+  var v = q.get('xhub-variant')
+  if (v) document.documentElement.setAttribute('data-xhub-variant', v)
+})()

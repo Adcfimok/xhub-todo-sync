@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>示例扩展</title>
+  <style>
+    /* ---- 主题：双声明 fallback（无宿主预览时也有正确的深浅色） ---- */
+    :root {
+      color-scheme: light;
+      --surface: var(--xhub-surface, rgba(255, 255, 255, 0.66));
+      --well: var(--xhub-bg-card, rgba(255, 255, 255, 0.9));
+      --ink: var(--xhub-text-1, #1f2230);
+      --ink-2: var(--xhub-text-2, #5b6070);
+      --line: var(--xhub-border, rgba(0, 0, 0, 0.1));
+      --primary: var(--xhub-accent, #5b5bf5);
+      --radius: var(--xhub-radius-lg, 12px);
+    }
+    :root[data-xhub-theme="dark"] {
+      color-scheme: dark;
+      --surface: var(--xhub-surface, rgba(255, 255, 255, 0.06));
+      --well: var(--xhub-bg-card, rgba(255, 255, 255, 0.04));
+      --ink: var(--xhub-text-1, #e8e9f0);
+      --ink-2: var(--xhub-text-2, #a2a7b8);
+      --line: var(--xhub-border, rgba(255, 255, 255, 0.12));
+      --primary: var(--xhub-accent, #8b8bff);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      box-sizing: border-box;
+      /* 整页边距标准（宿主对 view/window/drawer 零边距，留白全由本页负责）：
+         默认左上 0 / 右下 20 —— 标题行贴标题栏下沿、与侧栏首个图标同带，右下不顶窗沿；
+         用户在生成时选了「完全无边距」则改为 padding: 0 */
+      padding: 0 20px 20px 0;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      /* 铁律：页面底用 --xhub-page-bg（无壁纸 = 宿主页面背景；有壁纸 = transparent） */
+      background: var(--xhub-page-bg, transparent);
+      color: var(--ink);
+    }
+
+    .panel {
+      /* 内容表面用玻璃令牌（已含宿主玻璃透明度乘数） */
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+
+    /* 壁纸透底态：去白描边、留落影、文字加黑柔光晕 */
+    :root[data-xhub-wallpaper-clear="1"] .panel {
+      border-color: transparent;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+
+    button {
+      font: inherit;
+      color: var(--ink);
+      background: var(--well);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--primary); }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h1 id="title" style="margin:0 0 8px;font-size:16px;font-weight:650">示例扩展</h1>
+    <p id="out" style="margin:0 0 12px;color:var(--ink-2)">加载中…</p>
+    <button id="act">执行</button>
+  </div>
+
+  <script>
+    // 桥 API 由宿主注入，不要 import 任何包
+    const $out = document.getElementById('out')
+
+    // boot 模式：storage 是异步的，先读回数据再首绘，不要在顶层同步读
+    async function boot() {
+      let runtime = null
+      try {
+        // 一律 try/catch：权限被拒（PERMISSION_DENIED）时要给人话，不能白屏
+        runtime = await window.xhub.runtime.info()
+        const saved = await window.xhub.storage.get('state')
+        $out.textContent = saved
+          ? `已保存：${JSON.stringify(saved)}`
+          : `就绪：${runtime.name} v${runtime.version}（${runtime.runtime}）`
+      } catch (e) {
+        $out.textContent = `${e.code || 'ERROR'}：${e.message}`
+      }
+    }
+
+    document.getElementById('act').addEventListener('click', async () => {
+      try {
+        // 写入前确认基础能力；不确定的 API 以 runtime.info().capabilities 为准
+        await window.xhub.storage.set('state', { at: Date.now() })
+        $out.textContent = '已保存'
+      } catch (e) {
+        $out.textContent = `${e.code || 'ERROR'}：${e.message}`
+      }
+    })
+
+    boot()
+  </script>
+</body>
+</html>

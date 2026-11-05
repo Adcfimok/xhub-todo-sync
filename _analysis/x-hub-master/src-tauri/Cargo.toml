@@ -1,0 +1,104 @@
+[package]
+name = "app"
+version = "0.9.7"
+description = "本地个人效率工作台"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+# preserve_order：发布时回写扩展 manifest.json 必须保持原键序（bump_manifest_in_dir），
+# 否则 serde_json 默认的 BTreeMap 会把键按字母重排，开发者的 manifest diff 一片狼藉
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = ["protocol-asset", "tray-icon", "unstable"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-log = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+# reveal：截图/录屏完成后「打开所在文件夹」定位产物文件（opener::reveal）
+opener = { version = "0.7", features = ["reveal"] }
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+dirs = "6"
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = { version = "0.3", features = ["io"] }
+percent-encoding = "2"
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "client"] }
+http-body-util = "0.1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native", "sync-secret-service"] }
+sha2 = "0.10"
+getrandom = "0.3"
+ed25519-dalek = "2"
+base64 = "0.22"
+semver = "1"
+sysinfo = "0.32"
+# 剪贴板 BMP 快照导出转 PNG + 图标导入 .ico 解码（ico 内部复用 bmp/png 管线），避免拖入全家桶；
+# jpeg/webp/gif 是笔记内嵌图片的合法格式，复制笔记图片上剪贴板时需解码重编码成 PNG
+image = { version = "0.25", default-features = false, features = ["bmp", "png", "ico", "jpeg", "webp", "gif"] }
+# 截图/GIF 录屏（recorder.rs）：xcap 屏幕采集（Windows 走 WGC，GPU 加速），
+# gif + color_quant 停止后两遍编码（NeuQuant 256 色全局调色板）；不捆绑 ffmpeg
+xcap = "0.9"
+gif = "0.14"
+color_quant = "2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# WebView2 内存级别联动（webview_mem.rs）：与 tauri/wry 锁定的同版本，保证 COM
+# 类型同源可 cast（ICoreWebView2_19::SetMemoryUsageTargetLevel）
+webview2-com = "0.38.2"
+windows-core = "0.61"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"
+# 防火墙规则改走 COM（service.rs::firewall_com，INetFwPolicy2）：不再 spawn netsh.exe——
+# 开机自启/关机退出时控制台子系统未就绪，netsh 会以 0xC0000142 弹系统错误框
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_NetworkManagement_WindowsFirewall",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

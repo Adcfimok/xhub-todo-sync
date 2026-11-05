@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>安全探针（验收用）</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; padding: 16px;
+        font: 13px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+        color: var(--xhub-text-1, #1a1a1a);
+        background: var(--xhub-bg-base, transparent);
+      }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.hint { margin: 0 0 12px; opacity: .75; }
+      label { display: block; margin: 12px 0 4px; font-weight: 600; }
+      input {
+        width: 100%; box-sizing: border-box; padding: 6px 8px;
+        font: 12px ui-monospace, Consolas, monospace;
+        border: 1px solid var(--xhub-border-soft, #d0d0d8); border-radius: 8px;
+        background: var(--xhub-bg-card-soft, rgba(0,0,0,.03)); color: inherit;
+      }
+      button {
+        margin-top: 12px; padding: 7px 14px; font: inherit; font-weight: 600;
+        border: 0; border-radius: 8px; cursor: pointer;
+        background: var(--xhub-brand-500, #5b5bf5); color: #fff;
+      }
+      pre {
+        margin: 12px 0 0; padding: 10px; border-radius: 8px; overflow: auto;
+        font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+        background: var(--xhub-bg-card-soft, rgba(0,0,0,.04));
+      }
+      .ok { color: #1a7f37; font-weight: 600; }
+      .bad { color: #c62828; font-weight: 600; }
+      .warn { color: #b26a00; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>安全探针（验收用）</h1>
+    <p class="hint">
+      验证 T0.1/T0.2 是否生效：扩展**不应该**能读到宿主数据文件。此扩展不发布到市场。1111111111111
+    </p>
+
+    <label>本扩展的 origin（应为 <code>xhub-ext.localhost</code>，不是 asset.localhost）</label>
+    <pre id="origin"></pre>
+
+    <label for="target">目标文件绝对路径（默认探测数据根下的数据库与配置）</label>
+    <input id="target" spellcheck="false" />
+
+    <button id="run">开始探测</button>
+    <pre id="out">未开始。</pre>
+
+    <script>
+      const out = document.getElementById('out')
+      document.getElementById('origin').textContent = location.origin
+
+      // 数据根默认值：%APPDATA%\x-hub（便携版 / 自定义数据目录请手动改成实际路径）
+      const DEFAULT_TARGETS = [
+        '%APPDATA%\\x-hub\\xhub.db',
+        '%APPDATA%\\x-hub\\app.json',
+      ]
+      document.getElementById('target').value = DEFAULT_TARGETS[0]
+
+      function log(level, text) {
+        const cls = level === 'ok' ? 'ok' : level === 'bad' ? 'bad' : 'warn'
+        out.innerHTML += `\n<span class="${cls}">[${level}]</span> ${text}`
+      }
+
+      /** 与 Rust 侧 asset 协议的路径口径一致：反斜杠转 /，逐段 percent 编码，保留 / */
+      function toAssetUrl(filePath) {
+        const encoded = filePath
+          .replace(/\\/g, '/')
+          .split('/')
+          .map((seg) => encodeURIComponent(seg))
+          .join('/')
+        return 'http://asset.localhost/' + encoded
+      }
+
+      async function probe(filePath) {
+        out.textContent = `探测目标：${filePath}`
+        log('info', `自身 origin = ${location.origin}`)
+
+        const url = toAssetUrl(filePath)
+        log('info', `尝试 fetch ${url}`)
+        try {
+          const resp = await fetch(url)
+          log('info', `HTTP 状态 ${resp.status}`)
+          const buf = await resp.arrayBuffer()
+          if (buf.byteLength > 0) {
+            const head = [...new Uint8Array(buf.slice(0, 16))]
+              .map((b) => b.toString(16).padStart(2, '0'))
+              .join(' ')
+            log('bad', `读到了 ${buf.byteLength} 字节！前 16 字节: ${head}`)
+            log('bad', '⇒ 数据可被扩展读取，T0.1/T0.2 未生效')
+          } else {
+            log('warn', '响应为空（0 字节）——请核对路径是否存在')
+          }
+        } catch (e) {
+          log('ok', `读取失败：${e && e.message ? e.message : e}`)
+          log('ok', '⇒ 扩展无法读取该文件（跨源被拒 / 作用域拒绝 / 文件不存在）')
+        }
+
+        // 交叉验证：file:// 直读（任何情况下都不应成功）
+        try {
+          const r2 = await fetch('file:///' + filePath.replace(/\\/g, '/'))
+          const b2 = await r2.arrayBuffer()
+          log(b2.byteLength ? 'bad' : 'warn', `file:// 读取结果字节数 ${b2.byteLength}`)
+        } catch (e) {
+          log('ok', `file:// 读取失败（预期）：${e && e.message ? e.message : e}`)
+        }
+      }
+
+      document.getElementById('run').addEventListener('click', () => {
+        const t = document.getElementById('target').value.trim()
+        if (!t) return
+        if (t.includes('%APPDATA%')) {
+          out.textContent = ''
+          log('warn', '请先把 %APPDATA% 替换成实际路径（例如 C:\\Users\\你的用户名\\AppData\\Roaming）')
+          return
+        }
+        void probe(t)
+      })
+    </script>
+  </body>
+</html>

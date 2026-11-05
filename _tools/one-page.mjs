@@ -1,0 +1,10 @@
+import { chromium } from 'playwright'
+const b = await chromium.launch({ channel: 'msedge' })
+const ctx = await b.newContext({ viewport: { width: 1280, height: 860 } })
+const p = await ctx.newPage()
+p.on('console', (m) => console.log('[page]', m.type(), m.text()))
+await p.goto('http://127.0.0.1:8099/view/index.html?theme=dark', { waitUntil: 'networkidle' })
+await p.waitForTimeout(4000)
+const st = await (await fetch('http://127.0.0.1:47821/api/admin/state')).json()
+console.log('after:', JSON.stringify(Object.fromEntries(Object.entries(st.stats.byCol).map(([k, v]) => [k, v.live]))))
+await b.close()

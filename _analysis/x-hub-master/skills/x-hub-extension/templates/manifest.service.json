@@ -1,0 +1,34 @@
+{
+  "id": "com.example.my-ext",
+  "name": "我的扩展",
+  "version": "0.1.0",
+  "runtime": "service",
+  "kind": "view",
+  "surfaces": ["view"],
+  "openIn": ["view", "window"],
+  "entry": {
+    "view": "./view/index.html"
+  },
+  "backend": {
+    "entry": "./service/index.js",
+    "engine": { "type": "node", "minVersion": "24" },
+    "cwd": "./service",
+    "port": 0,
+    "health": "/healthz"
+  },
+  "icon": "./icon.svg",
+  "description": "一句话说明这个扩展做什么",
+  "author": "作者署名（改成你的名字或团队名，市场卡片与详情页会展示）",
+  "permissions": [],
+  "agent": {
+    "tools": [
+      {
+        "name": "get_info",
+        "description": "返回本扩展的基本信息（名称/版本），作为 AI 工具的最小示例；落地时换成真实的数据查询或操作",
+        "level": "read",
+        "parameters": { "type": "object", "properties": {} },
+        "returns": "{ name, version }"
+      }
+    ]
+  }
+}

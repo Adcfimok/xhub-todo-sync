@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>待办同步</title>
+<link rel="stylesheet" href="./view.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="top-left">
+      <h1>待办同步</h1>
+      <span class="chip" id="status-chip" data-state="offline"><i class="dot"></i><span id="status-text">正在连接…</span></span>
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="btn-sync" type="button">立即同步</button>
+      <button class="btn ghost" id="btn-rotate" type="button">换配对码</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <aside class="col-left">
+      <section class="panel">
+        <h2>配对手机<span class="hint">用手机 App 扫码，或手动输入地址与配对码</span></h2>
+        <div class="pair">
+          <div class="qr" id="qr" aria-label="配对二维码"></div>
+          <div class="pair-info">
+            <div class="code" id="pair-code">······</div>
+            <div class="hint" id="pair-hint">5 分钟内有效</div>
+            <div class="primary-addr">
+              <code id="primary-addr">—</code>
+              <button class="copy" id="btn-copy-addr" type="button">复制</button>
+            </div>
+            <ul class="addrs" id="addrs"></ul>
+          </div>
+        </div>
+        <p class="note" id="pair-note">服务尚未就绪。</p>
+      </section>
+
+      <section class="panel">
+        <h2>设备<span class="count" id="dev-count">0</span></h2>
+        <ul class="devices" id="devices"></ul>
+      </section>
+    </aside>
+
+    <main class="col-right">
+      <section class="panel grow">
+        <h2>待办<span class="count" id="todo-count">0</span><span class="hint" id="todo-hint"></span></h2>
+        <ul class="todos" id="todos"></ul>
+        <div class="empty" id="todos-empty" hidden>还没有待办</div>
+      </section>
+
+      <section class="panel">
+        <h2>冲突记录<span class="count" id="conflict-count">0</span>
+          <button class="link" id="btn-clear-conflicts" type="button">清空</button>
+        </h2>
+        <ul class="conflicts" id="conflicts"></ul>
+        <div class="empty" id="conflicts-empty" hidden>没有冲突，两端一致</div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="bar">
+    <span id="bar-left">—</span>
+    <span class="spacer"></span>
+    <span id="bar-right"></span>
+  </footer>
+
+  <script src="./vendor/qrcode.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

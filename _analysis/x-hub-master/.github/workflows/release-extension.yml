@@ -1,0 +1,51 @@
+name: Publish Extension（已停用）
+
+# ⚠️ 已停用：扩展发布自 2026-09 起统一走服务端（x-hub-server 审核台 → 服务端签名 → 推 COS）。
+# 停用原因：
+#   1. 发布入口必须唯一 —— 本 workflow 与其它通道并存时会出现「清单与签名不是同一版」，
+#      客户端会拒收整份清单（线上真实故障）；
+#   2. **私钥纪律** —— 服务端接管签发后，公开仓里的签名私钥 secret 必须删除，
+#      否则等于把发布入口留在开源仓库里（见 x-hub-server docs/ACCEPTANCE-signing-migration.md §一.6）。
+#
+# 本文件保留为「已停用」的显式记录：任何触发都只打印说明并失败，不会发布任何东西。
+#
+# ✅ 状态（2026-09 已核实，后到的读者不必再核对）：
+#    - 仓库 Actions 的 secrets 与 variables 均为 0 条，本 workflow 曾依赖的签名私钥与
+#      COS / R2 凭据 secret 已全部删除；`.github/` 下已无任何 `secrets.*` 引用。
+#    - 本 workflow 历史上仅手动触发过 2 次（2026-08-29），两次都在第 3 步 checkout 扩展
+#      仓库时 404 失败，后续步骤全部 skipped —— 从未有 secret 被注入到任何 runner。
+#    - 签名私钥只在发布侧保管；客户端内嵌公钥（`src-tauri/keys/market_public.key`）未轮换。
+# 确认线上已无依赖后本文件可直接删除。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ext_repo:
+        description: '【已停用】扩展源码仓库（HTTPS clone URL）'
+        required: false
+        default: 'https://github.com/x-hub-desktop/x-hub-extensions.git'
+      ext_path:
+        description: '【已停用】扩展源码目录（仓库内相对路径，含 manifest.json）'
+        required: false
+        default: 'extensions/hello-web'
+
+permissions:
+  contents: read
+
+jobs:
+  disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 说明为什么停用
+        run: |
+          cat <<'EOF'
+          本 workflow 已停用，扩展发布统一走服务端审核台。
+
+            正常流程：客户端「扩展中心 → 发布」→ 服务端关卡 + AI 预审 + 人工审核
+                      → 服务端签名并推送 COS
+            线上自检：x-hub-server 仓 `npm run verify:registry`、`npm run push:check`
+
+          如需应急本地发布，请走 x-hub-server 的应急通道（并事后核对清单与签名），
+          不要在这里恢复发布步骤：公开仓持有发布私钥是必须消除的风险点。
+          EOF
+          exit 1

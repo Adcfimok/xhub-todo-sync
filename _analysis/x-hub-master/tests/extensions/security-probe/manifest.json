@@ -1,0 +1,12 @@
+{
+  "id": "com.x-hub.security-probe",
+  "name": "安全探针（验收用）",
+  "version": "0.0.1",
+  "description": "仅用于安全验收：探测扩展能否读取宿主数据文件。不发布到市场。",
+  "runtime": "web",
+  "kind": "view",
+  "surfaces": ["view"],
+  "openIn": ["view"],
+  "entry": { "view": "./index.html" },
+  "permissions": []
+}

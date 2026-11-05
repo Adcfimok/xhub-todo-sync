@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>示例模块</title>
+  <style>
+    /* ---- 主题：双声明 fallback ---- */
+    :root {
+      color-scheme: light;
+      --ink: var(--xhub-text-1, #1f2230);
+      --ink-2: var(--xhub-text-2, #5b6070);
+      --line: var(--xhub-border, rgba(0, 0, 0, 0.1));
+      --primary: var(--xhub-accent, #5b5bf5);
+      --well: var(--xhub-bg-card, rgba(255, 255, 255, 0.9));
+      --radius: var(--xhub-radius-lg, 12px);
+    }
+    :root[data-xhub-theme="dark"] {
+      color-scheme: dark;
+      --ink: var(--xhub-text-1, #e8e9f0);
+      --ink-2: var(--xhub-text-2, #a2a7b8);
+      --line: var(--xhub-border, rgba(255, 255, 255, 0.12));
+      --primary: var(--xhub-accent, #8b8bff);
+      --well: var(--xhub-bg-card, rgba(255, 255, 255, 0.04));
+    }
+
+    /* module 卡片：宿主已套玻璃卡；**默认没有宿主表头**，卡面完全由本页负责（包括要不要画标题）。
+       想让宿主画一行「品牌色图标 + manifest.name」，在 manifest 声明
+       "moduleOptions": { "defaultHideTitle": false }，此时不要再画一遍同名标题。
+       12px 内边距与内置模块卡一致；留白全由本页负责，宿主不给 iframe 加 padding。 */
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      padding: 12px;
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      background: transparent;
+      color: var(--ink);
+      /* 容器查询：内容随格子尺寸自适应 */
+      container-type: size;
+    }
+    .num { font-size: clamp(20px, 26cqh, 40px); font-weight: 650; line-height: 1.1; }
+    .cap { font-size: clamp(10px, 8cqh, 12px); color: var(--ink-2); }
+
+    /* 形态分支：只能用属性选择器（CSS 里没有条件表达式） */
+    :root[data-xhub-variant="compact"] .detail { display: none; }
+    :root[data-xhub-variant="full"] .detail { display: block; }
+  </style>
+</head>
+<body>
+  <div class="num" id="value">--</div>
+  <div class="cap" id="caption">加载中…</div>
+  <div class="detail" id="detail"></div>
+
+  <script>
+    // ---- 通道 1：URL query（首帧即可用）----
+    let variant = new URLSearchParams(location.search).get('xhub-variant') || 'compact'
+
+    function render() {
+      document.getElementById('caption').textContent = `形态：${variant}`
+      document.getElementById('detail').textContent =
+        variant === 'compact' ? '' : '更多内容只在非紧凑形态显示'
+    }
+
+    // ---- 通道 2：宿主把形态写到 <html> 的 data-xhub-variant，CSS 分支自动生效 ----
+    // ---- 通道 3：运行时切形态事件（不重载）----
+    window.xhub.events.on('xhub:variant-changed', (v) => {
+      variant = v
+      render()
+    })
+
+    async function boot() {
+      try {
+        const saved = await window.xhub.storage.get('value')
+        if (saved != null) document.getElementById('value').textContent = saved
+      } catch (e) {
+        document.getElementById('caption').textContent = `${e.code || 'ERROR'}：${e.message}`
+      }
+    }
+
+    render()
+    boot()
+  </script>
+</body>
+</html>

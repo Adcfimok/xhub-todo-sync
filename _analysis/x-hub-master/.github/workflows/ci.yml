@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # 24：下面的 test:utils 用 node --test 直接加载 .ts 源码（原生类型剥离），
+          # Node 20 不支持、会 ERR_UNKNOWN_FILE_EXTENSION。构建产物不受影响（release.yml 仍走 20）
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend type check & build
+        run: npm run build
+
+      # 安全回归（tests/security.test.mjs）：此前只存在于 package.json，CI 从未执行
+      - name: Frontend security tests
+        run: npm run test:security
+
+      # 纯函数单测（图片语法回收 / 一键美化）：同为「零依赖 TS 源码直接加载」，不依赖构建产物
+      - name: Frontend util tests
+        run: npm run test:utils
+
+      - name: Rust check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Rust 单测（含扩展内容协议的入口引用改写夹具回归）。必须走这个包装脚本：
+      # 它会给测试 exe 嵌 Common-Controls v6 manifest，否则 Windows 上测试进程
+      # 起不来（STATUS_ENTRYPOINT_NOT_FOUND），表现为「测试静默没跑」。
+      - name: Rust tests
+        run: npm run tauri:test

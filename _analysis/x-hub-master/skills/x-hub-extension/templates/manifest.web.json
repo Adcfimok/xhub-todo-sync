@@ -1,0 +1,16 @@
+{
+  "id": "com.example.my-ext",
+  "name": "我的扩展",
+  "version": "0.1.0",
+  "runtime": "web",
+  "kind": "view",
+  "surfaces": ["view"],
+  "openIn": ["view"],
+  "entry": {
+    "view": "./view/index.html"
+  },
+  "icon": "./icon.svg",
+  "description": "一句话说明这个扩展做什么",
+  "author": "作者署名（改成你的名字或团队名，市场卡片与详情页会展示）",
+  "permissions": []
+}
