@@ -34,6 +34,12 @@
       "version": "2.8.0",
       "kind": "android-apk",
       "file": "android/todo-link-2.8.0.apk"
+    },
+    {
+      "id": "android-apk-2.9.0",
+      "version": "2.9.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.9.0.apk"
     }
   ]
 }
