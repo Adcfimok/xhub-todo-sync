@@ -1,0 +1,86 @@
+{
+  "repo": "Adcfimok/xhub-todo-sync",
+  "mode": "api",
+  "checkedAt": "2026-11-06T01:40:22.556Z",
+  "counts": {
+    "total": 3,
+    "ok": 3,
+    "drift": 0,
+    "warn": 0
+  },
+  "ok": true,
+  "items": [
+    {
+      "id": "xhub-ext-2.1.0",
+      "version": "2.1.0",
+      "kind": "xhub-extension",
+      "tag": "xhub-ext-v2.1.0",
+      "file": "dist/com.zhou.todo-relay-2.1.0.zip",
+      "status": "ok",
+      "artifact": {
+        "bytes": 57707,
+        "sha256": "b7490ab6319b94ad398c40659ffb95956b78ef5dff7f571a62f0915794146a41",
+        "commit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/xhub-ext-v2.1.0",
+        "tag": "xhub-ext-v2.1.0",
+        "assets": [
+          "com.zhou.todo-relay-2.1.0.zip"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.1.0/com.zhou.todo-relay-2.1.0.zip",
+      "tagCommit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+      "issues": []
+    },
+    {
+      "id": "android-apk-2.7.0",
+      "version": "2.7.0",
+      "kind": "android-apk",
+      "tag": "android-v2.7.0",
+      "file": "android/todo-link-2.7.0.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 182937,
+        "sha256": "1a1bfd056e1203e9ce317ab12d248cc02a986670e8e13760e3229e536f8cf0c1",
+        "commit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.7.0",
+        "tag": "android-v2.7.0",
+        "assets": [
+          "todo-link-2.7.0.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.7.0/todo-link-2.7.0.apk",
+      "tagCommit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+      "issues": []
+    },
+    {
+      "id": "android-apk-2.8.0",
+      "version": "2.8.0",
+      "kind": "android-apk",
+      "tag": "android-v2.8.0",
+      "file": "android/todo-link-2.8.0.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 187105,
+        "sha256": "8dfa35ab192f7996953696fabc7e36100954614321002673e0ed78cad3efcd22",
+        "commit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.8.0",
+        "tag": "android-v2.8.0",
+        "assets": [
+          "todo-link-2.8.0.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.8.0/todo-link-2.8.0.apk",
+      "tagCommit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+      "issues": []
+    }
+  ]
+}
