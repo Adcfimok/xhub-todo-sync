@@ -62,6 +62,8 @@ function render(force) {
     cleanup = null
   }
   current = name
+  // 供样式按页面微调（如 AI 页底部输入胶囊上方的提示条位置）
+  document.body.dataset.route = name
   const page = PAGES[name]
   titleEl.textContent = page.meta.title
   backEl.hidden = !SUB_PAGES[name]

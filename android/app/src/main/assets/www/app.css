@@ -27,6 +27,17 @@
   --radius: 14px;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* ---------- 底部悬浮导航的几何 ----------
+     四个值互相耦合，改一处其余三处跟着走，避免「抬了底栏、内容还被压住」：
+       --dock-h      胶囊自身高度
+       --dock-lift   胶囊下沿到可用区底边的距离（拇指够得着的核心参数）
+       --dock-clear  列表末尾与胶囊上沿之间的呼吸区
+     高度用 vh 而不是定值：屏幕越高，手越难够到最底下，抬得也越多；
+     clamp 兜住小屏（不低于 44px）与平板（不超过 64px）。 */
+  --dock-h: 58px;
+  --dock-lift: clamp(44px, 7vh, 64px);
+  --dock-clear: 42px;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -132,7 +143,7 @@ input, textarea { user-select: text; }
   -webkit-overflow-scrolling: touch;
   padding: 0 16px;
 }
-.list-pad { height: calc(122px + var(--safe-b)); }
+.list-pad { height: calc(var(--dock-lift) + var(--dock-h) + var(--dock-clear) + var(--safe-b)); }
 
 /* ---------- 筛选 ---------- */
 .filterbar {
@@ -298,15 +309,16 @@ input, textarea { user-select: text; }
 .empty-s { margin: 6px 0 0; font-size: 13px; color: var(--ink-3); }
 
 /* ---------- 底部导航（对标酷安：悬浮胶囊 + 磨砂玻璃 + 中央新建） ---------- */
-/* 悬浮而不是贴底：左右各留 8px、底部留 8px，身体是半透明玻璃，
+/* 悬浮而不是贴底：左右各留 8px，下沿离可用区底边 var(--dock-lift)。
+   v2.8.1 起从 22px 抬到 clamp(44px, 7vh, 64px)：单手竖握时胶囊落在拇指自然停留的
+   下缘 1/8 区域，不再需要指尖下探到掌心底部。
    页面内容从它背后滚过，模糊才有东西可糊——这是「玻璃」成立的前提。 */
 .tabbar {
   position: absolute;
   left: 8px;
   right: 8px;
-  /* 上移到拇指自然够得着的位置：8→22px，再叠加安全区 */
-  bottom: calc(22px + var(--safe-b));
-  height: 58px;
+  bottom: calc(var(--dock-lift) + var(--safe-b));
+  height: var(--dock-h);
   padding: 0 6px;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -426,6 +438,10 @@ input, textarea { user-select: text; }
 .tab-add:active { transform: scale(.93); }
 @media (prefers-reduced-motion: reduce) {
   .tab-indicator, .tab svg, .tab-add { transition: none; }
+}
+/* 横屏 / 矮屏（高 ≤480px）：竖握前提不成立，抬 44px 会挤掉正文，收回贴边 */
+@media (max-height: 480px) {
+  :root { --dock-lift: 10px; --dock-clear: 20px; }
 }
 
 /* ---------- 卡片 / 设置 ---------- */
@@ -591,7 +607,7 @@ input, textarea { user-select: text; }
 /* ---------- toast ---------- */
 .toast {
   position: fixed;
-  left: 50%; bottom: calc(90px + var(--safe-b));
+  left: 50%; bottom: calc(var(--dock-lift) + var(--dock-h) + 12px + var(--safe-b));
   transform: translateX(-50%);
   max-width: 80vw;
   padding: 10px 16px;
@@ -601,6 +617,10 @@ input, textarea { user-select: text; }
   font-size: 13.5px;
   z-index: 40;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
+}
+/* AI 页底部有输入胶囊，提示条再抬一层，避免压住输入框 */
+body[data-route='ai'] .toast {
+  bottom: calc(var(--dock-lift) + var(--dock-h) + 12px + 84px + var(--safe-b));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -787,10 +807,10 @@ select.input { appearance: none; }
   font-variant-numeric: tabular-nums;
 }
 
-/* 磨砂胶囊输入区（统计信息在框内顶部） */
+/* AI 页底部有输入胶囊：留白跟着底栏一起抬，输入框永远在胶囊上沿之上 */
 .composer {
   flex: none;
-  margin: 0 12px calc(92px + var(--safe-b));
+  margin: 0 12px calc(var(--dock-lift) + var(--dock-h) + 12px + var(--safe-b));
   padding: 7px 10px 7px 14px;
   border-radius: 26px;
   background: var(--glass);
