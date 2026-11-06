@@ -4,7 +4,7 @@ export const COLS = ['todos', 'notes', 'stickies', 'resources', 'snippets']
 export const COL_NAME = { todos: '待办', notes: '笔记', stickies: '便签', resources: '速达', snippets: '提示词' }
 export const DB_NAME = 'todolink'
 export const DB_VER = 2
-export const APP_VER = '2.8.0'
+export const APP_VER = '2.9.0'
 
 const REQ_TIMEOUT = 9000
 
