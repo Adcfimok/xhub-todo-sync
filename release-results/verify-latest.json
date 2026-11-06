@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-06T01:40:22.556Z",
+  "checkedAt": "2026-11-06T02:00:45.432Z",
   "counts": {
-    "total": 3,
-    "ok": 3,
+    "total": 4,
+    "ok": 4,
     "drift": 0,
     "warn": 0
   },
@@ -80,6 +80,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.8.0/todo-link-2.8.0.apk",
       "tagCommit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
+      "issues": []
+    },
+    {
+      "id": "android-apk-2.9.0",
+      "version": "2.9.0",
+      "kind": "android-apk",
+      "tag": "android-v2.9.0",
+      "file": "android/todo-link-2.9.0.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 187105,
+        "sha256": "ed6a90c5dd1316fc1423716b3397ee2cdb46d447168f1d3bcfbce3e0f4187112",
+        "commit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.9.0",
+        "tag": "android-v2.9.0",
+        "assets": [
+          "todo-link-2.9.0.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk",
+      "tagCommit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
       "issues": []
     }
   ]

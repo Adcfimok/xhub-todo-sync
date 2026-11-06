@@ -5,7 +5,8 @@
   "actualOrder": [
     "xhub-ext-2.1.0",
     "android-apk-2.7.0",
-    "android-apk-2.8.0"
+    "android-apk-2.8.0",
+    "android-apk-2.9.0"
   ],
   "results": [
     {
@@ -61,11 +62,29 @@
       "commit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
       "notes": "# 待办同步 · 安卓端 v2.8.0\n\n修复「同一 Wi-Fi 却配对不上」：电脑端可能给出虚拟网卡 / VPN 地址，而手机只拿到这一个地址就无从重试。\n本版把配对升级为多候选地址 + 逐个尝试，并把失败原因显示在页面上。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 12 |\n| versionName | 2.8.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n\n## 本版变更\n\n- **二维码载荷升级到 v3**：`xhub://3/<配对码>/<ip:port,...>`，一次带最多 4 个候选地址（物理网卡优先，虚拟网卡靠后）。\n- **配对流程改为逐个尝试**：对每个候选地址先 `ping` 再 `pair`，任一成功即停止；全部失败时把最后一条真实原因显示在配对卡上，不再是笼统的「配对失败」。\n- **手输地址同样走多候选**：手输一个地址时，仍会尝试该地址的常见邻居地址，避免用户手动抄错网卡。\n- **设置页配对卡重做**：状态、候选数量、重试入口集中在同一张卡，配不上时不用来回翻页面。\n- **首页与底栏位置**按 2.8 设计稿校正，中央 ＋ 随页面切换新建类型。\n\n## 升级说明\n\n与 2.7.0 同一签名证书，**可直接覆盖安装，本地数据与登录态保留**（数据保留机制见 `docs/06`）。\n\n## 安装\n\n1. 下载 `todo-link-2.8.0.apk`，允许「安装未知来源应用」。\n2. 打开「我的 → 同步与设置」→ 扫码（推荐）或手输主地址 + 6 位配对码。\n3. 配对成功后首页出现五类计数卡片。\n\n## 验收记录\n\n- 安卓端冒烟：首页卡片、底栏位置、设置页配对卡、版本号 `2.8.0` 均通过，无脚本错误。\n- 配对成功/失败截图：`docs/screenshots/pair-pc-ok.png`、`pair-pc-perm-denied.png`、`pair-phone-connected.png`。\n- 完整验收条目与真实日志见 `docs/04-交付范围与验收标准.md` §15。\n\n## 校验\n\n```bash\napksigner verify --print-certs todo-link-2.8.0.apk   # 证书应为 0be758eb…\naapt dump badging todo-link-2.8.0.apk | head -2      # versionCode 12 / 2.8.0\n```\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
       "releaseName": "待办同步 安卓端 v2.8.0"
+    },
+    {
+      "id": "android-apk-2.9.0",
+      "version": "2.9.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.9.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 187105,
+      "sha256": "ed6a90c5dd1316fc1423716b3397ee2cdb46d447168f1d3bcfbce3e0f4187112",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk",
+      "uploadedAt": "2026-11-06T02:00:42.276Z",
+      "tag": "android-v2.9.0",
+      "commit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
+      "notes": "# 待办同步 · 安卓端 v2.9.0\n\n底部悬浮导航栏整体上移，落到单手拇指自然够得着的区域；横屏/矮屏自动收回贴边，避免挤占正文。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 13 |\n| versionName | 2.9.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n\n## 本版变更\n\n- **底部导航栏上移**：胶囊下沿到可用区底边的距离由固定 22px 改为 `clamp(44px, 7vh, 64px)`，屏幕越高抬得越多，落在拇指自然停留的下缘 1/8 区域。\n- **四个耦合数值收拢为 CSS 变量**：`--dock-h`（胶囊高度）、`--dock-lift`（下沿抬升量）、`--dock-clear`（内容呼吸区），列表留白、toast 提示条、AI 输入胶囊三处跟随，杜绝「抬了底栏、内容还被压住」。\n- **横屏/矮屏自适应**：`@media (max-height: 480px)` 下 lift 收到 10px、clear 收到 20px，避免横向场景挤掉正文。\n- **刘海屏/手势导航适配**：所有底部偏移叠加 `env(safe-area-inset-bottom)`，安全区与手势条天然避让。\n- **修复版本号未随构建生效**：此前 `AndroidManifest.xml` 硬编码 versionCode/versionName 覆盖了构建参数，本版清单与 `build.sh` 统一为 13 / 2.9.0。\n\n## 升级说明\n\n与 2.8.0 同一签名证书（SHA-256 `0be758eb…`），**可直接覆盖安装，本地数据与登录态保留**（数据保留机制见 `docs/06`）。\n\n## 安装\n\n1. 下载 `todo-link-2.9.0.apk`，允许「安装未知来源应用」。\n2. 打开「我的 → 同步与设置」→ 扫码（推荐）或手输主地址 + 6 位配对码。\n3. 配对成功后首页出现五类计数卡片。\n\n## 验收记录\n\n- 底栏几何校验：`_tools/navbar-check.mjs` 在 5 种视口（360×740 / 390×844 / 412×915 / 430×932 / 740×360）下全部通过，胶囊间距、列表留白、toast、AI 输入胶囊均无重叠、无遮挡。\n- 横屏滚动到底验证：末块内容与胶囊上沿留 30px 余量，可完整露出。\n- 版本号复检：`aapt dump badging` 返回 versionCode 13 / versionName 2.9.0，签名 SHA-256 与 2.8.0 一致。\n\n## 校验\n\n```bash\napksigner verify --print-certs todo-link-2.9.0.apk   # 证书应为 0be758eb…\naapt dump badging todo-link-2.9.0.apk | head -2      # versionCode 13 / 2.9.0\n```\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
+      "releaseName": "待办同步 安卓端 v2.9.0"
     }
   ],
   "counts": {
-    "total": 3,
-    "success": 0,
+    "total": 4,
+    "success": 1,
     "failed": 0,
     "skipped": 3,
     "unprocessed": 0
@@ -75,6 +94,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-06T01:40:18.423Z",
-  "finishedAt": "2026-11-06T01:40:19.785Z"
+  "startedAt": "2026-11-06T02:00:38.092Z",
+  "finishedAt": "2026-11-06T02:00:42.276Z"
 }
