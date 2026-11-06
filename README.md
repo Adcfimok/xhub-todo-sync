@@ -1,4 +1,4 @@
-# x-hub 全功能手机端 · 交付包
+# x-hub 全功能手机端
 
 对 x-hub（桌面效率工作台）的完整逆向 + 规范化 + 双端实现：
 一个多集合同步扩展，以及一个把桌面端内容全部搬过去的安卓 App。
@@ -75,29 +75,6 @@ dev/mock-bridge.js                    浏览器预览用的假桥
 扩展页「同步内容」下方写着读取/写回范围。若出现红字「缺少读取权限」，点红字下方的「打开扩展权限设置」，
 把 `data:read` 打开后重新同步即可；已同步过的数据不会因为撤销权限被清空。
 
-## 发布新版本
-
-产物进仓库即发布。按命名规则把 `dist/com.zhou.todo-relay-<x.y.z>.zip` 或 `android/todo-link-<x.y.z>.apk`
-放好，配一份版本说明 `_tools/release-upload/notes/<kind>-<version>.md`，推到 `main`：
-
-```bash
-node _tools/release-upload/sync.mjs            # 先体检：哪些产物还没登记
-node _tools/release-upload/sync.mjs --push     # 登记 + 提交 + 推送
-```
-
-推送后 Actions 会自动建标签（`xhub-ext-v2.1.0` / `android-v2.8.0`）、建对应版本的 Release、
-附上版本说明与本版本产物，最后用 `verify.mjs` 回查「标签指向的提交、资产大小与 SHA-256」是否与仓库一致。
-不一致则本次运行直接失败，不会留下一个「看起来发了」的版本。
-
-细节、命令表与补救办法见 `docs/08-发布与版本同步流程.md`。
-
-## 验证
-
-```bash
-node extensions/todo-relay/tests/e2e.mjs     # 42 项，全部通过
-node _tools/paircode-test.mjs                # 二维码载荷解析 6 项
-node _tools/netinfo-test.cjs                 # 网卡排序 5 项
-```
 
 ## 两条硬限制
 
