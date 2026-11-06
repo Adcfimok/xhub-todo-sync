@@ -177,7 +177,7 @@ function isOnRemoteBranch(root, commit, branch) {
   }
 }
 
-async function githubFacts({ cfg, tag, token, fetchImpl, api = 'https://api.github.com' }) {
+export async function githubFacts({ cfg, tag, token, fetchImpl = globalThis.fetch, api = 'https://api.github.com' }) {
   const { owner, repo } = cfg.github ?? {};
   const headers = {
     Authorization: `Bearer ${token}`,

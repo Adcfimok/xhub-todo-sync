@@ -17,7 +17,7 @@ import {
   isPrerelease,
 } from './lib.mjs';
 import { createAdapter } from './adapters.mjs';
-import { compareArtifactRelease } from './verify.mjs';
+import { compareArtifactRelease, githubFacts } from './verify.mjs';
 
 function memoryAdapter({ failOn = null, preset = [] } = {}) {
   const store = new Set(preset);
@@ -488,3 +488,40 @@ test('一致性判定：缺 Release、缺资产、大小/摘要/标签不符都�
   assert.equal(warned[0].severity, 'warn');
 });
 
+
+test('校验器能解析 Release、资产与附注标签指向的提交', async () => {
+  const calls = [];
+  const fake = async (url) => {
+    calls.push(url);
+    if (url.includes('/releases/tags/')) {
+      return {
+        status: 200,
+        ok: true,
+        async json() {
+          return {
+            id: 1,
+            tag_name: 'android-v2.8.0',
+            html_url: 'https://example.invalid/r',
+            assets: [{ name: 'todo-link-2.8.0.apk', size: 187105, digest: `sha256:${'a'.repeat(64)}` }],
+          };
+        },
+      };
+    }
+    if (url.includes('/git/ref/tags/')) {
+      return { status: 200, ok: true, async json() { return { object: { type: 'tag', sha: 'tag-object' } }; } };
+    }
+    if (url.includes('/git/tags/')) {
+      return { status: 200, ok: true, async json() { return { object: { type: 'commit', sha: 'commit-sha' } }; } };
+    }
+    throw new Error(`意外请求：${url}`);
+  };
+  const facts = await githubFacts({
+    cfg: { github: { owner: 'unit', repo: 'repo' } },
+    tag: 'android-v2.8.0',
+    token: 'unit-token',
+    fetchImpl: fake,
+  });
+  assert.equal(facts.release.assets[0].name, 'todo-link-2.8.0.apk');
+  assert.equal(facts.tagCommit, 'commit-sha');
+  assert.equal(calls.length, 3);
+});

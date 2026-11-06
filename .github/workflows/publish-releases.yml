@@ -79,8 +79,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p release-results
-          [ -f release-summary.json ] && cp release-summary.json release-results/latest.json
-          [ -f release-verify.json ] && cp release-verify.json release-results/verify-latest.json
+          if [ -f release-summary.json ]; then cp release-summary.json release-results/latest.json; fi
+          if [ -f release-verify.json ]; then cp release-verify.json release-results/verify-latest.json; fi
           git add release-results
           if ! git diff --quiet --cached; then
             git commit -m "chore(release): 回写发布与校验结果"
