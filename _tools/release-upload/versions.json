@@ -1,5 +1,5 @@
 {
-  "package": "Adcfimok/xhub-todo-sync/releases/version-archive",
+  "package": "Adcfimok/xhub-todo-sync/releases",
   "adapter": "github-releases",
   "local": {
     "dir": "_tools/release-upload/outbox"
@@ -7,8 +7,14 @@
   "github": {
     "owner": "Adcfimok",
     "repo": "xhub-todo-sync",
-    "releaseTag": "version-archive",
-    "releaseName": "x-hub 待办同步 · 历史版本产物"
+    "tagTemplates": {
+      "xhub-extension": "xhub-ext-v{version}",
+      "android-apk": "android-v{version}"
+    },
+    "nameTemplates": {
+      "xhub-extension": "待办同步扩展 · x-hub v{version}",
+      "android-apk": "待办同步 安卓端 v{version}"
+    }
   },
   "versions": [
     {

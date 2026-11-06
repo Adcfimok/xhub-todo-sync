@@ -11,6 +11,7 @@ docs/
   06-数据保留与升级迁移.md          ← 升级后数据"丢失"的根因与方案
   04-交付范围与验收标准.md
   05-安卓端功能对照与实现.md          ← 搬了哪些 / 怎么搬 / 哪些搬不了
+  08-发布与版本同步流程.md            ← 出新版本时怎么发、怎么补救
 extensions/todo-relay/                扩展源码（多集合 + 扩展宿主）
 dist/com.zhou.todo-relay-2.1.0.zip    扩展分发包
 android/
@@ -73,6 +74,22 @@ dev/mock-bridge.js                    浏览器预览用的假桥
 
 扩展页「同步内容」下方写着读取/写回范围。若出现红字「缺少读取权限」，点红字下方的「打开扩展权限设置」，
 把 `data:read` 打开后重新同步即可；已同步过的数据不会因为撤销权限被清空。
+
+## 发布新版本
+
+产物进仓库即发布。按命名规则把 `dist/com.zhou.todo-relay-<x.y.z>.zip` 或 `android/todo-link-<x.y.z>.apk`
+放好，配一份版本说明 `_tools/release-upload/notes/<kind>-<version>.md`，推到 `main`：
+
+```bash
+node _tools/release-upload/sync.mjs            # 先体检：哪些产物还没登记
+node _tools/release-upload/sync.mjs --push     # 登记 + 提交 + 推送
+```
+
+推送后 Actions 会自动建标签（`xhub-ext-v2.1.0` / `android-v2.8.0`）、建对应版本的 Release、
+附上版本说明与本版本产物，最后用 `verify.mjs` 回查「标签指向的提交、资产大小与 SHA-256」是否与仓库一致。
+不一致则本次运行直接失败，不会留下一个「看起来发了」的版本。
+
+细节、命令表与补救办法见 `docs/08-发布与版本同步流程.md`。
 
 ## 验证
 

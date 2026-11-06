@@ -1,0 +1,39 @@
+name: 每日校验 Releases 一致性
+
+# 兜底巡检：即使没人推代码，也每天确认「仓库里的产物」与「Releases 上的版本」没有漂移。
+# 发现漂移时运行失败，并在 Step Summary 里列出具体版本与原因。
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 每天 09:00（北京时间）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 准备 Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 校验每个版本的 Release、资产与标签
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node _tools/release-upload/verify.mjs --json verify.json
+
+      - name: 输出校验结果
+        if: always()
+        run: |
+          if [ -f verify.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat verify.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

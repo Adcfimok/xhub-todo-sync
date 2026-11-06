@@ -4,6 +4,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { tagForEntry, releaseNameFor, isPrerelease, KIND_META } from './lib.mjs';
 
 function artifactName(rec) {
   return path.basename(rec.file);
@@ -35,10 +36,14 @@ function localAdapter(cfg) {
 }
 
 /**
- * GitHub Releases 适配器：把每个产物作为 Release 资产上传。需要 GITHUB_TOKEN。
- * releaseTag 支持模板 {version} / {kind}：
- *   固定值（如 version-archive）→ 所有版本归档到同一个 Release；
- *   模板值（如 v{version}）      → 每个版本各建一个 Release。
+ * GitHub Releases 适配器：一个版本产物对应一条 Release，资产可下载。
+ * 需要 GITHUB_TOKEN（repo 权限），Actions 里用内置令牌即可。
+ *
+ * 一致性保证：
+ *   1. 标签按类型模板生成（如 xhub-ext-v2.1.0 / android-v2.8.0），一个版本一条；
+ *   2. 建 Release 前先把标签显式打到「包含该产物的提交」上，
+ *      避免 GitHub 默认把标签建到当时默认分支最新提交、导致代码与发布错位；
+ *   3. Release 正文取版本说明文件，缺失时回退为事实型正文。
  * fetchImpl 可注入，便于在不联网的情况下做确定性单测。
  */
 function githubAdapter(cfg, { fetchImpl = globalThis.fetch } = {}) {
@@ -50,7 +55,6 @@ function githubAdapter(cfg, { fetchImpl = globalThis.fetch } = {}) {
   if (!owner || !repo) {
     throw new Error('github-releases 适配器需要 github.owner / github.repo');
   }
-  const tagTemplate = cfg.github.releaseTag ?? 'version-archive';
   const api = 'https://api.github.com';
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -58,36 +62,81 @@ function githubAdapter(cfg, { fetchImpl = globalThis.fetch } = {}) {
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'xhub-release-uploader',
   };
+  const jsonHeaders = { ...headers, 'Content-Type': 'application/json' };
   const releases = new Map();
 
-  function fill(template, rec) {
-    return String(template).replaceAll('{version}', rec.version).replaceAll('{kind}', rec.kind);
-  }
   function tagFor(rec) {
-    return fill(tagTemplate, rec);
+    return rec.tag ?? tagForEntry(cfg, rec);
+  }
+  function nameFor(rec) {
+    return rec.releaseName ?? releaseNameFor(cfg, rec);
+  }
+
+  async function readError(res) {
+    try {
+      return (await res.text()).slice(0, 300);
+    } catch {
+      return '<无响应正文>';
+    }
+  }
+
+  /** 确保标签存在，且指向指定提交；不传 commit 时交给 GitHub 默认行为。 */
+  async function ensureTag(tag, commit) {
+    if (!commit) return null;
+    const existing = await fetchImpl(`${api}/repos/${owner}/${repo}/git/ref/tags/${encodeURIComponent(tag)}`, { headers });
+    if (existing.status === 200) return existing.json();
+    if (existing.status !== 404) {
+      throw new Error(`查询标签 ${tag} 失败：HTTP ${existing.status} ${await readError(existing)}`);
+    }
+    const created = await fetchImpl(`${api}/repos/${owner}/${repo}/git/refs`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ ref: `refs/tags/${tag}`, sha: commit }),
+    });
+    // 422 多为并发下已被另一进程创建，继续按已存在处理
+    if (!created.ok && created.status !== 422) {
+      throw new Error(`创建标签 ${tag}（指向 ${commit.slice(0, 7)}）失败：HTTP ${created.status} ${await readError(created)}`);
+    }
+    return created.ok ? created.json() : null;
+  }
+
+  async function fetchReleaseByTag(tag) {
+    const res = await fetchImpl(`${api}/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`查询 Release ${tag} 失败：HTTP ${res.status} ${await readError(res)}`);
+    return res.json();
   }
 
   async function ensureRelease(rec) {
     const tag = tagFor(rec);
     if (releases.has(tag)) return releases.get(tag);
-    let res = await fetchImpl(`${api}/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers });
-    if (res.status === 404) {
-      res = await fetchImpl(`${api}/repos/${owner}/${repo}/releases`, {
+    let release = await fetchReleaseByTag(tag);
+    if (!release) {
+      const meta = KIND_META[rec.kind] ?? {};
+      await ensureTag(tag, rec.commit);
+      const body = {
+        tag_name: tag,
+        name: nameFor(rec),
+        body: rec.notes ?? `## ${meta.label ?? rec.kind} ${rec.version}\n\n由 _tools/release-upload 发布。`,
+        draft: false,
+        prerelease: isPrerelease(rec.version),
+      };
+      if (rec.commit) body.target_commitish = rec.commit;
+      const res = await fetchImpl(`${api}/repos/${owner}/${repo}/releases`, {
         method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tag_name: tag,
-          name: fill(cfg.github.releaseName ?? 'x-hub 待办同步 · 版本产物归档', rec),
-          body: 'x-hub 扩展与安卓端版本产物，由 _tools/release-upload 按版本顺序上传。',
-          draft: false,
-          prerelease: false,
-        }),
+        headers: jsonHeaders,
+        body: JSON.stringify(body),
       });
+      if (res.status === 422) {
+        // 并发创建时回读一次，仍拿不到才报错
+        release = await fetchReleaseByTag(tag);
+        if (!release) throw new Error(`创建 Release ${tag} 返回 422：${await readError(res)}`);
+      } else if (!res.ok) {
+        throw new Error(`创建 Release ${tag} 失败：HTTP ${res.status} ${await readError(res)}`);
+      } else {
+        release = await res.json();
+      }
     }
-    if (!res.ok) {
-      throw new Error(`获取或创建 Release（${tag}）失败：HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
-    }
-    const release = await res.json();
     releases.set(tag, release);
     return release;
   }
@@ -95,7 +144,13 @@ function githubAdapter(cfg, { fetchImpl = globalThis.fetch } = {}) {
   return {
     name: 'github-releases',
     describe() {
-      return { package: cfg.package, owner, repo, tagTemplate };
+      return {
+        package: cfg.package,
+        owner,
+        repo,
+        strategy: 'per-version',
+        tagTemplates: cfg.github.tagTemplates ?? { default: cfg.github.releaseTag ?? '{tagPrefix}-v{version}' },
+      };
     },
     async exists(rec) {
       const release = await ensureRelease(rec);

@@ -60,8 +60,14 @@ export function entryKey(entry) {
   return `${String(entry.version).replace(/^v/i, '')}::${entry.kind}`;
 }
 
+/** 产物类型元信息：标签前缀、中文名、产物目录，供标签/标题/说明文件命名复用。 */
+export const KIND_META = {
+  'xhub-extension': { label: 'x-hub 待办同步扩展', tagPrefix: 'xhub-ext', dir: 'dist' },
+  'android-apk': { label: '待办同步 安卓端', tagPrefix: 'android', dir: 'android' },
+};
+
 function baseRecord(entry) {
-  return {
+  const rec = {
     id: entry.id,
     version: entry.version,
     kind: entry.kind,
@@ -75,6 +81,83 @@ function baseRecord(entry) {
     target: null,
     uploadedAt: null,
   };
+  // 发布信息向下传递：适配器需要 tag / 提交 / 说明正文才能建出与代码一致的 Release
+  for (const key of ['tag', 'commit', 'notes', 'releaseName']) {
+    if (entry[key]) rec[key] = entry[key];
+  }
+  return rec;
+}
+
+/** 填充模板占位符：{version} / {kind} / {tagPrefix} / {label}。 */
+export function fillTemplate(template, entry) {
+  const meta = KIND_META[entry.kind] ?? {};
+  return String(template)
+    .replaceAll('{version}', String(entry.version).replace(/^v/i, ''))
+    .replaceAll('{kind}', entry.kind)
+    .replaceAll('{tagPrefix}', meta.tagPrefix ?? entry.kind)
+    .replaceAll('{label}', meta.label ?? entry.kind);
+}
+
+/**
+ * 解析某个产物的 Release 标签。
+ * 优先级：条目自带 tag > 按类型的 tagTemplates > 全局 releaseTag（固定值，兼容旧的归档式发布）。
+ */
+export function tagForEntry(cfg, entry) {
+  if (entry.tag) return entry.tag;
+  const templates = cfg?.github?.tagTemplates ?? {};
+  const tpl = templates[entry.kind] ?? cfg?.github?.releaseTag ?? '{tagPrefix}-v{version}';
+  return fillTemplate(tpl, entry);
+}
+
+/** 解析 Release 标题，可按类型配置 nameTemplates。 */
+export function releaseNameFor(cfg, entry) {
+  const templates = cfg?.github?.nameTemplates ?? {};
+  const tpl = templates[entry.kind] ?? '{label} v{version}';
+  return fillTemplate(tpl, entry);
+}
+
+/** 版本说明文件的仓库相对路径。 */
+export function notesRelPath(entry) {
+  return `_tools/release-upload/notes/${entry.kind}-${String(entry.version).replace(/^v/i, '')}.md`;
+}
+
+/** 读取版本说明；没有就返回 null，由调用方决定用事实型兜底正文。 */
+export async function readNotes(root, entry) {
+  try {
+    const text = await fs.readFile(path.resolve(root, notesRelPath(entry)), 'utf8');
+    return text.trim() ? text.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 兜底正文：只写可核验的事实（产物信息 + 来源提交），不编造变更内容。
+ * 缺说明文件时用它，避免发布出空白的 Release 说明。
+ */
+export function renderFallbackNotes({ entry, bytes = null, sha256 = null, commit = null }) {
+  const meta = KIND_META[entry.kind] ?? {};
+  const lines = [
+    `> 未找到版本说明文件 \`${notesRelPath(entry)}\`，以下为产物事实信息（不含推测性变更描述）。`,
+    '',
+    '## 产物',
+    '',
+    '| 项目 | 值 |',
+    '| --- | --- |',
+    `| 类型 | ${meta.label ?? entry.kind} |`,
+    `| 版本 | ${entry.version} |`,
+    `| 文件 | \`${path.basename(entry.file)}\` |`,
+    bytes === null ? null : `| 大小 | ${bytes} 字节 |`,
+    sha256 ? `| SHA-256 | \`${sha256}\` |` : null,
+    commit ? `| 来源提交 | \`${commit.slice(0, 7)}\` |` : null,
+    '',
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+/** 预发布版本（带 -rc / -beta 等）自动标记，避免正式用户误装。 */
+export function isPrerelease(version) {
+  return parseVersion(version).pre.length > 0;
 }
 
 function validate(entry, index) {
@@ -202,6 +285,8 @@ export async function executePlan({ queue, duplicates = [], adapter, options = {
       if (!st.isFile()) throw new Error(`产物不是普通文件：${entry.file}`);
       rec.bytes = st.size;
       rec.sha256 = await sha256File(absolutePath);
+      // 说明正文在拿到大小/校验和之后再兜底，正文里的事实才是准确的
+      if (!rec.notes && typeof options.notesFor === 'function') rec.notes = options.notesFor(rec);
 
       if (options.dryRun) {
         rec.status = 'success';

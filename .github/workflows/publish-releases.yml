@@ -1,6 +1,7 @@
-name: 同步版本产物到 Releases
+name: 发布版本到 Releases
 
-# 版本产物或上传器变更时，按版本顺序把已存在的扩展包与安装包上传到 GitHub Releases。
+# 触发即发布：任何一次把新版本产物推到 main 的提交，都会自动建一条对应版本的 Release，
+# 附版本说明与本版本构建产物，标签钉在本次提交上（代码与发布同源）。
 # 使用平台自带的 GITHUB_TOKEN，无需在本机保存任何访问令牌。
 on:
   push:
@@ -15,12 +16,19 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: publish-releases
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
+        with:
+          # 需要完整历史：用 git log 找到「包含该产物的提交」，标签才能钉准
+          fetch-depth: 0
 
       - name: 准备 Node.js 22
         uses: actions/setup-node@v4
@@ -30,41 +38,57 @@ jobs:
       - name: 单测
         run: node --test _tools/release-upload/upload.test.mjs
 
-      - name: 按版本顺序上传到 Releases
+      - name: 按版本发布到 Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
         run: node _tools/release-upload/upload.mjs --discover --out release-summary.json
+
+      - name: 校验代码与 Release 是否一致
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node _tools/release-upload/verify.mjs --json release-verify.json || echo "VERIFY_FAILED=1" >> "$GITHUB_ENV"
 
       - name: 输出结构化汇总
         if: always()
         run: |
-          if [ -f release-summary.json ]; then
-            cat release-summary.json
-            cat release-summary.json >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '未生成汇总文件' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for f in release-summary.json release-verify.json; do
+            if [ -f "$f" ]; then
+              echo "### $f" >> "$GITHUB_STEP_SUMMARY"
+              echo '```json' >> "$GITHUB_STEP_SUMMARY"
+              cat "$f" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       - name: 保存汇总为构建产物
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-upload-summary
-          path: release-summary.json
+          name: release-summary
+          path: |
+            release-summary.json
+            release-verify.json
           if-no-files-found: warn
 
       # 回写路径不在上方 paths 触发列表内，避免自触发循环；本地 git pull 即可读到真实结果
       - name: 回写结构化汇总到仓库
         if: always()
         run: |
-          if [ -f release-summary.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            mkdir -p release-results
-            cp release-summary.json release-results/latest.json
-            git add release-results/latest.json
-            if ! git diff --quiet --cached; then
-              git commit -m "chore(release): 回写 Releases 上传汇总"
-              git push origin HEAD:main
-            fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p release-results
+          [ -f release-summary.json ] && cp release-summary.json release-results/latest.json
+          [ -f release-verify.json ] && cp release-verify.json release-results/verify-latest.json
+          git add release-results
+          if ! git diff --quiet --cached; then
+            git commit -m "chore(release): 回写发布与校验结果"
+            git push origin HEAD:main
           fi
+
+      - name: 校验不通过则让本次运行失败
+        if: always() && env.VERIFY_FAILED == '1'
+        run: |
+          echo "::error::代码与 Release 不一致，详见 release-results/verify-latest.json"
+          exit 1

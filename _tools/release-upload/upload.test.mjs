@@ -4,8 +4,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseVersion, compareVersion, buildPlan, discoverArtifacts, executePlan, summarize } from './lib.mjs';
+import {
+  parseVersion,
+  compareVersion,
+  buildPlan,
+  discoverArtifacts,
+  executePlan,
+  summarize,
+  tagForEntry,
+  releaseNameFor,
+  renderFallbackNotes,
+  isPrerelease,
+} from './lib.mjs';
 import { createAdapter } from './adapters.mjs';
+import { compareArtifactRelease } from './verify.mjs';
 
 function memoryAdapter({ failOn = null, preset = [] } = {}) {
   const store = new Set(preset);
@@ -323,9 +335,156 @@ test('Releases 目标：上传接口报错时失败即停，原因与未处理�
   assert.equal(summary.integrity.allAccounted, true);
 });
 
-test('Releases 目标支持按版本建 Release 的模板标签', () => {
-  const cfg = releasesConfig({ releaseTag: 'v{version}-{kind}' });
-  const state = { releaseCreated: false, assets: [], calls: [], failUpload: false };
-  const adapter = createAdapter(cfg, { fetchImpl: fakeReleasesFetch(state) });
-  assert.match(adapter.describe().tagTemplate, /\{version\}/);
+test('Releases 目标按类型解析标签，一版一标签，未知类型回退到前缀模板', () => {
+  const cfg = {
+    ...releasesConfig(),
+    github: {
+      owner: 'unit',
+      repo: 'repo',
+      token: 'unit-token',
+      tagTemplates: { 'xhub-extension': 'xhub-ext-v{version}', 'android-apk': 'android-v{version}' },
+      nameTemplates: { 'android-apk': '待办同步 安卓端 v{version}' },
+    },
+  };
+  assert.equal(tagForEntry(cfg, { kind: 'xhub-extension', version: '2.1.0' }), 'xhub-ext-v2.1.0');
+  assert.equal(tagForEntry(cfg, { kind: 'android-apk', version: '2.8.0' }), 'android-v2.8.0');
+  assert.equal(tagForEntry(cfg, { kind: 'unknown-kind', version: '1.0.0' }), 'unknown-kind-v1.0.0');
+  assert.equal(tagForEntry(cfg, { kind: 'android-apk', version: '2.8.0', tag: 'custom-tag' }), 'custom-tag');
+  assert.equal(releaseNameFor(cfg, { kind: 'android-apk', version: '2.8.0' }), '待办同步 安卓端 v2.8.0');
+  assert.equal(releaseNameFor(cfg, { kind: 'xhub-extension', version: '2.1.0' }), 'x-hub 待办同步扩展 v2.1.0');
+  assert.equal(isPrerelease('2.9.0-rc.1'), true);
+  assert.equal(isPrerelease('2.9.0'), false);
 });
+
+// ---- 一版一 Release：标签钉提交、正文取说明 ----
+
+function fakeTaggedFetch(state) {
+  return async (url, init = {}) => {
+    const method = init.method ?? 'GET';
+    const u = new URL(url);
+    state.calls.push(`${method} ${u.pathname}`);
+
+    if (u.hostname === 'uploads.github.com') {
+      const name = u.searchParams.get('name');
+      const id = Number(u.pathname.split('/')[5]);
+      state.releaseAssets.get(id).push({ name, browser_download_url: `https://example.invalid/${name}` });
+      return { status: 201, ok: true, async json() { return { browser_download_url: `https://example.invalid/${name}` }; } };
+    }
+    if (u.pathname.includes('/git/ref/tags/')) {
+      const tag = decodeURIComponent(u.pathname.split('/').pop());
+      if (state.refs.has(tag)) {
+        return { status: 200, ok: true, async json() { return { object: { type: 'commit', sha: state.refs.get(tag) } }; } };
+      }
+      return { status: 404, ok: false, async text() { return 'Not Found'; } };
+    }
+    if (u.pathname.endsWith('/git/refs') && method === 'POST') {
+      const body = JSON.parse(init.body);
+      const tag = body.ref.replace('refs/tags/', '');
+      state.refs.set(tag, body.sha);
+      return { status: 201, ok: true, async json() { return { object: { type: 'commit', sha: body.sha } }; } };
+    }
+    if (u.pathname.includes('/releases/tags/')) {
+      const tag = decodeURIComponent(u.pathname.split('/').pop());
+      const rel = state.byTag.get(tag);
+      if (!rel) return { status: 404, ok: false, async text() { return 'Not Found'; } };
+      return { status: 200, ok: true, async json() { return { ...rel, assets: state.releaseAssets.get(rel.id) }; } };
+    }
+    if (u.pathname.endsWith('/releases') && method === 'POST') {
+      const body = JSON.parse(init.body);
+      const id = 100 + state.byTag.size;
+      const rel = {
+        id,
+        tag_name: body.tag_name,
+        name: body.name,
+        body: body.body,
+        target_commitish: body.target_commitish,
+        prerelease: body.prerelease,
+        html_url: `https://example.invalid/${body.tag_name}`,
+      };
+      state.byTag.set(body.tag_name, rel);
+      state.releaseAssets.set(id, []);
+      return { status: 201, ok: true, async json() { return { ...rel, assets: [] }; } };
+    }
+    throw new Error(`意外请求：${method} ${url}`);
+  };
+}
+
+test('每个版本各建一条 Release，标签钉在产物提交上，正文取版本说明', async (t) => {
+  const root = await tempRoot(t);
+  const list = entries('ext-2-1-0', 'apk-2-8-0');
+  list[0].commit = 'a'.repeat(40);
+  list[1].commit = 'b'.repeat(40);
+  list[0].notes = '# 扩展 2.1.0 说明';
+  list[1].notes = '# 安卓 2.8.0 说明';
+  for (const e of list) await fs.writeFile(path.join(root, e.file), e.id);
+
+  const cfg = {
+    ...releasesConfig(),
+    github: {
+      owner: 'unit',
+      repo: 'repo',
+      token: 'unit-token',
+      tagTemplates: { 'xhub-extension': 'xhub-ext-v{version}', 'android-apk': 'android-v{version}' },
+      nameTemplates: { 'android-apk': '待办同步 安卓端 v{version}' },
+    },
+  };
+  const state = { calls: [], refs: new Map(), byTag: new Map(), releaseAssets: new Map() };
+  const adapter = createAdapter(cfg, { fetchImpl: fakeTaggedFetch(state) });
+  const { queue } = buildPlan(list);
+  const summary = await executePlan({ queue, adapter, options: { root, package: 'unit/releases' } });
+
+  assert.equal(summary.counts.success, 2);
+  assert.deepEqual([...state.refs.keys()].sort(), ['android-v2.8.0', 'xhub-ext-v2.1.0']);
+  assert.equal(state.refs.get('xhub-ext-v2.1.0'), 'a'.repeat(40));
+  assert.equal(state.refs.get('android-v2.8.0'), 'b'.repeat(40));
+
+  const ext = state.byTag.get('xhub-ext-v2.1.0');
+  const apk = state.byTag.get('android-v2.8.0');
+  assert.equal(ext.body, '# 扩展 2.1.0 说明');
+  assert.equal(apk.body, '# 安卓 2.8.0 说明');
+  assert.equal(apk.name, '待办同步 安卓端 v2.8.0');
+  assert.equal(apk.target_commitish, 'b'.repeat(40));
+  assert.equal(state.releaseAssets.get(ext.id).length, 1);
+  assert.equal(state.releaseAssets.get(apk.id).length, 1);
+  // 两条 Release 各自独立，不能复用同一个 id
+  assert.notEqual(ext.id, apk.id);
+});
+
+test('缺说明文件时用事实型兜底正文，明确写出缺失并附校验和', () => {
+  const entry = { id: 'android-apk-2.8.0', version: '2.8.0', kind: 'android-apk', file: 'android/todo-link-2.8.0.apk' };
+  const body = renderFallbackNotes({ entry, bytes: 187105, sha256: 'c'.repeat(64), commit: 'd'.repeat(40) });
+  assert.match(body, /未找到版本说明文件/);
+  assert.match(body, /notes\/android-apk-2\.8\.0\.md/);
+  assert.match(body, /187105 字节/);
+  assert.match(body, new RegExp('c'.repeat(64)));
+  assert.match(body, /ddddddd/);
+  // 不编造变更内容
+  assert.doesNotMatch(body, /修复|新增|优化/);
+});
+
+test('一致性判定：缺 Release、缺资产、大小/摘要/标签不符都算 drift，缺说明只算提醒', () => {
+  const artifact = { bytes: 10, sha256: 'a'.repeat(64), commit: 'f'.repeat(40), notesPresent: true, notesPath: 'n.md' };
+  const rel = { html_url: 'u', tag_name: 't', assets: [] };
+
+  assert.deepEqual(compareArtifactRelease({ artifact, release: rel, asset: { name: 'x', size: 10 } }), []);
+  assert.equal(compareArtifactRelease({ artifact, release: null })[0].code, 'missing-release');
+  assert.equal(compareArtifactRelease({ artifact, release: rel, asset: null })[0].code, 'missing-asset');
+  assert.equal(
+    compareArtifactRelease({ artifact, release: rel, asset: { size: 11 } })[0].code,
+    'size-mismatch',
+  );
+  assert.equal(
+    compareArtifactRelease({ artifact, release: rel, asset: { size: 10, digest: `sha256:${'b'.repeat(64)}` } })[0].code,
+    'digest-mismatch',
+  );
+  assert.equal(
+    compareArtifactRelease({ artifact, release: rel, asset: { size: 10, digest: `sha256:${'A'.repeat(64)}` } }).length,
+    0,
+    '摘要比较应忽略大小写与 sha256: 前缀',
+  );
+  const mismatch = compareArtifactRelease({ artifact, release: rel, asset: { size: 10 }, tagCommit: 'e'.repeat(40) });
+  assert.equal(mismatch[0].code, 'tag-mismatch');
+  const warned = compareArtifactRelease({ artifact: { ...artifact, notesPresent: false }, release: rel, asset: { size: 10 } });
+  assert.equal(warned[0].severity, 'warn');
+});
+

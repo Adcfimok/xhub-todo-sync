@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// 按版本顺序把已存在的产物上传到指定软件包。
+// 按版本顺序把已存在的产物发布到 GitHub Releases：
+// 一个版本一条 Release，标签钉在「包含该产物的提交」上，正文取 notes/ 下的版本说明。
 //
-// 用法（在项目根目录执行，默认上传到 GitHub Releases，需要 GITHUB_TOKEN）：
+// 用法（在项目根目录执行，默认发布到 GitHub Releases，需要 GITHUB_TOKEN）：
 //   GITHUB_TOKEN=xxx node _tools/release-upload/upload.mjs
 //   node _tools/release-upload/upload.mjs --dry-run                  # 只校验顺序与产物
 //   node _tools/release-upload/upload.mjs --discover --out last-summary.json
@@ -26,10 +27,34 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildPlan, discoverArtifacts, executePlan, entryKey } from './lib.mjs';
+import { execFileSync } from 'node:child_process';
+import {
+  buildPlan,
+  discoverArtifacts,
+  executePlan,
+  entryKey,
+  tagForEntry,
+  releaseNameFor,
+  readNotes,
+  renderFallbackNotes,
+} from './lib.mjs';
 import { createAdapter } from './adapters.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 取「最后修改该产物的提交」：Release 标签就钉在这里，保证 tag 与产物同源。 */
+function lastCommitFor(root, file) {
+  try {
+    const out = execFileSync('git', ['log', '-1', '--format=%H', '--', file], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
 
 function parseArgs(argv) {
   const flags = new Set();
@@ -77,6 +102,16 @@ async function main() {
     ? (await discoverArtifacts(root)).filter((e) => !knownKeys.has(entryKey(e)))
     : [];
   const plan = buildPlan(cfg.versions ?? [], { discovered });
+
+  // 把「标签 / 标题 / 说明 / 提交」逐条解析好再执行：一个版本对应一条 Release
+  const fallbackCommit = process.env.GITHUB_SHA || null;
+  for (const entry of plan.queue) {
+    entry.commit = entry.commit || lastCommitFor(root, entry.file) || fallbackCommit;
+    entry.tag = entry.tag || tagForEntry(cfg, entry);
+    entry.releaseName = entry.releaseName || releaseNameFor(cfg, entry);
+    const notes = await readNotes(root, entry);
+    if (notes) entry.notes = notes;
+  }
   // 目标软件包不可用时也输出结构化汇总：首个版本记为失败，其余记为未处理，原因原样上报
   let adapter;
   try {
@@ -98,6 +133,10 @@ async function main() {
     console.error(`顺序依据：${plan.orderSource === 'manifest-order' ? '清单给定顺序' : '版本号从旧到新'}`);
     console.error(`计划条目：${plan.queue.length} 个上传项 + ${plan.duplicates.length} 个重复跳过项`);
     if (discovered.length) console.error(`自动发现产物：${discovered.length} 个（与清单合并去重）`);
+    for (const e of plan.queue) {
+      const at = e.commit ? e.commit.slice(0, 7) : '未指定';
+      console.error(`  发布计划：${e.tag ?? '(待定)'} | ${e.releaseName ?? ''} | ${e.file} @ ${at}`);
+    }
     console.error('---');
   }
 
@@ -111,10 +150,12 @@ async function main() {
       orderSource: plan.orderSource,
       dryRun: flags.has('dry-run'),
       force: flags.has('force'),
+      notesFor: (rec) => rec.notes ?? renderFallbackNotes(rec),
     },
     onEvent(rec) {
       if (flags.has('quiet')) return;
-      const line = `${LABEL[rec.status]} ${rec.id} | ${rec.version} | ${rec.kind} | ${rec.file}${rec.reason ? ` | ${rec.reason}` : ''}`;
+      const tag = rec.tag ? ` [${rec.tag}]` : '';
+      const line = `${LABEL[rec.status]} ${rec.id} | ${rec.version} | ${rec.kind}${tag} | ${rec.file}${rec.reason ? ` | ${rec.reason}` : ''}`;
       console.error(line);
     },
   });
