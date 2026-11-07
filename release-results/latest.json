@@ -19,7 +19,8 @@
     "android-apk-2.12.0",
     "android-apk-2.12.1",
     "android-apk-2.12.2",
-    "android-apk-2.12.3"
+    "android-apk-2.12.3",
+    "android-apk-2.12.4"
   ],
   "results": [
     {
@@ -317,23 +318,41 @@
       "file": "android/todo-link-2.12.3.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 224466,
       "sha256": "13b1c0b5c4376cc4c2221aae3618bfebaf948124dbd70c5b7a525dacacde70d4",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.3/todo-link-2.12.3.apk",
-      "uploadedAt": "2026-11-07T15:37:04.546Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.12.3",
       "commit": "335112d014fbc316ffaf343536ad6b6b04243875",
       "notes": "# 安卓端 2.12.3（versionCode 22）\n\n修 2.12.2 升级后「统计卡与日历之间空一整行」的问题：统计卡收高后，下面的卡片没有跟着上移，首页中间留下约 88px 的空白。\n\n## 原因\n\n2.12.2 把统计卡从 2 行改成 1 行，升级时只改了统计卡自己的高度，下面各卡的 `y` 还是老坐标：\n\n```\n升级前：quote y0 · stats y1–y2 · calendar y3 …\n升级后：quote y0 · stats y1 · calendar y3 …   ← y2 空了整整一行\n```\n\n## 修法\n\n- 升级流程加一步「向上压实」：所有卡片按 `y`、`x` 排序后依次往上推，推不动为止。只会上移，不会横向移动、不会下移，卡片之间的上下顺序不变。\n- 布局版本 `LAYOUT_V` 2 → 3。装过 2.12.2 的机器（存档里已经是 v2、带空行）这次也会走一遍压实，不需要清除数据。\n- `compact()`（删卡/加卡时用的压实）改成复用同一个 `pullUp()`，避免两套压实现日后跑偏。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 85 项：新增「卡片之间没有空行」×3 视口 + 老布局升级 4 项\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 46 项（home-layout 12 项）\n```\n\n新增的回归点是拿 2.12.2 真实写回的存档复现的：\n\n- 塞一份 `v2` 布局（统计 y1、日历 y3）→ 载入后日历 `y=2`，统计卡与日历间距实测 **10px**（就是网格标准间距）\n- 载入后自动回写为 `v3`，且回写的坐标已经是压实后的\n- 三档视口都断言「每张卡正上方必须有邻居」，杜绝任何形式的空行\n\n## 产物\n\n- `todo-link-2.12.3.apk`，224,466 字节\n- SHA-256 `13b1c0b5c4376cc4c2221aae3618bfebaf948124dbd70c5b7a525dacacde70d4`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.12.3"
+    },
+    {
+      "id": "android-apk-2.12.4",
+      "version": "2.12.4",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.12.4.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 224466,
+      "sha256": "d8a00696c8b12367d87704c187e18ad8139b1b533861fb00afd23edf7fb5572b",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.4/todo-link-2.12.4.apk",
+      "uploadedAt": "2026-11-07T16:32:48.715Z",
+      "tag": "android-v2.12.4",
+      "commit": "13ef12a707e9bf26bef6ad9a27bef7ba3b0880de",
+      "notes": "# 安卓端 2.12.4（versionCode 23）\n\n体检后的一轮清理：修掉一个一直没生效的样式变量、把节日批量写入改成单事务、去掉几处会溢出/冗余的小问题。\n\n## 修了什么\n\n| # | 问题 | 影响 | 修法 |\n| --- | --- | --- | --- |\n| 1 | `--well` 变量被 6 处引用却从未定义 | `var(--well)` 计算失败 → 背景全透明。节日列表的「传统/节气/外国」标签、卡片库的「来自扩展」标签、设置里的预设胶囊、拖拽/删除按钮的按压反馈，全都少了底色 | 深色补 `rgba(255,255,255,.07)`、浅色补 `rgba(20,24,40,.055)` |\n| 2 | 节日批量写入/删除是 54 次独立事务 | 中途被杀进程会留下「只加了一半」的待办，且 `holidayBulk` 还没记账，开关无法撤回 | 合并成 1 个事务；失败回滚内存记录并提示重试 |\n| 3 | 卡头小字 `.hc-meta` 没有省略号保护 | 卡片被缩到 3 列、又赶上「今天完成 N 件 · N 待同步」较长时，可能把卡头撑破 | `max-width: 62%` + 省略号 |\n| 4 | 统计格子点下去没有反馈 | 首页主要点击区，按压无响应 | 加 `scale(.97)` 按压态 |\n| 5 | 首页两个未使用的导入（`normalizeLayout`、`missingCards`） | 死代码 | 移除 |\n\n## 体检过但确认不用改的\n\n- **整页重建**：7 张卡、225 个节点，`click → next frame` 实测 **5.6ms**，没必要做增量渲染。\n- **批量写入耗时**：54 条原实现 46ms（桌面 Chromium，真机约 3~5 倍），瓶颈不在速度而在事务原子性，故只合并事务。\n- **大数字**：四格填 1234/999 在 320/360 宽下都不溢出、不裁切、卡头不溢出。\n- **告警监听**：`emit()` 触发的是 2.5s 去抖的 sweep，54 次 emit 不会造成重复扫描。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 88 项（新增「节日标签有底色」）\nnode _tools/nav-v5-check.mjs    # 底栏 + 三处笔记入口\nnode _tools/navbar-check.mjs    # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 46 项\n```\n\n## 产物\n\n- `todo-link-2.12.4.apk`，224,466 字节\n- SHA-256 `d8a00696c8b12367d87704c187e18ad8139b1b533861fb00afd23edf7fb5572b`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.12.4"
     }
   ],
   "counts": {
-    "total": 17,
+    "total": 18,
     "success": 1,
     "failed": 0,
-    "skipped": 16,
+    "skipped": 17,
     "unprocessed": 0
   },
   "failure": null,
@@ -341,6 +360,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T15:36:58.811Z",
-  "finishedAt": "2026-11-07T15:37:04.546Z"
+  "startedAt": "2026-11-07T16:32:43.222Z",
+  "finishedAt": "2026-11-07T16:32:48.715Z"
 }

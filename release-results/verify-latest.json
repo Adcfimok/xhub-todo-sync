@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-07T15:37:12.963Z",
+  "checkedAt": "2026-11-07T16:33:00.959Z",
   "counts": {
-    "total": 17,
-    "ok": 17,
+    "total": 18,
+    "ok": 18,
     "drift": 0,
     "warn": 0
   },
@@ -416,6 +416,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.3/todo-link-2.12.3.apk",
       "tagCommit": "335112d014fbc316ffaf343536ad6b6b04243875",
+      "issues": []
+    },
+    {
+      "id": "android-apk-2.12.4",
+      "version": "2.12.4",
+      "kind": "android-apk",
+      "tag": "android-v2.12.4",
+      "file": "android/todo-link-2.12.4.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 224466,
+        "sha256": "d8a00696c8b12367d87704c187e18ad8139b1b533861fb00afd23edf7fb5572b",
+        "commit": "13ef12a707e9bf26bef6ad9a27bef7ba3b0880de",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.12.4",
+        "tag": "android-v2.12.4",
+        "assets": [
+          "todo-link-2.12.4.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.4/todo-link-2.12.4.apk",
+      "tagCommit": "13ef12a707e9bf26bef6ad9a27bef7ba3b0880de",
       "issues": []
     }
   ]
