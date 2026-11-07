@@ -320,13 +320,135 @@ function normalizeUsage(u) {
   }
 }
 
+/**
+ * 解析一个 SSE 事件块。
+ *
+ * 这里曾经只做三件事：按 `\n\n` 切、取块内第一条 `data:`、结束时把残留丢掉。
+ * 结果是只要上游不是「标准 \n\n + 每条都以空行结尾」，手机端就一个事件都解析不出来：
+ *   - 经 Cloudflare / 多数中转网关后，分隔符会变成 `\r\n\r\n` → 一条都切不开
+ *   - 最后一条事件不带结尾空行 → 被当成残留丢弃
+ *   - 上游忽略 stream、直接回完整 JSON → 没有 `data:` 前缀，解析出空
+ * 解析不出事件 = tool_calls 恒为空 = agent 循环在第 1 轮就 return，
+ * 表现就是「AI 只聊天、不建待办」。桌面端走 Rust 侧实现，不经过这段，所以同场景正常。
+ *
+ * @param {string} block 已按空行切开、且 \r\n 已归一化的事件块
+ * @returns {{content:string, usage:object|null, toolCalls:Array, error:string|null}}
+ */
+export function parseSseBlock(block) {
+  const dataLines = []
+  for (const rawLine of String(block).split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
+    // SSE 规范允许一个事件带多行 data:，需按 \n 拼接后再解析
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+  }
+  const empty = { content: '', usage: null, toolCalls: [], error: null }
+  if (!dataLines.length) {
+    // 整块没有 data: 前缀 —— 上游忽略 stream 时会直接回一个完整 JSON，
+    // 这时按非流式对象解析一次；解析不了（比如 502 的 HTML）就当空块跳过。
+    const whole = String(block).trim()
+    if (!whole) return empty
+    return parseSsePayload(whole) || empty
+  }
+  const data = dataLines.join('\n').trim()
+  if (!data || data === '[DONE]') return empty
+  return parseSsePayload(data) || empty
+}
+
+/**
+ * 把一段 JSON 文本解析成增量结果。流式的 delta 与非流式的 message 形状一致，
+ * 用同一个出口处理，避免两套代码漂移。
+ */
+function parseSsePayload(text) {
+  let obj
+  try {
+    obj = JSON.parse(text)
+  } catch (e) {
+    return null
+  }
+  if (obj.error) {
+    return {
+      content: '',
+      usage: null,
+      toolCalls: [],
+      error: typeof obj.error === 'string' ? obj.error : obj.error.message || '上游错误',
+    }
+  }
+
+  const choice = obj.choices && obj.choices[0]
+  // delta 是流式分片，message 是非流式整包，两者字段形状一致
+  const src = (choice && (choice.delta || choice.message)) || null
+  const out = { content: '', usage: obj.usage ? normalizeUsage(obj.usage) : null, toolCalls: [], error: null }
+  if (!src) return out
+  if (src.content) out.content = src.content
+  if (Array.isArray(src.tool_calls)) {
+    out.toolCalls = src.tool_calls.map((tc, i) => ({
+      index: typeof tc.index === 'number' ? tc.index : i,
+      id: tc.id || '',
+      name: (tc.function && tc.function.name) || '',
+      args: (tc.function && tc.function.arguments) || '',
+    }))
+  }
+  return out
+}
+
+/**
+ * 增量 SSE 分帧器。把「累积 → 归一化 → 按空行切」这三步单独拎出来，
+ * 好让分帧行为可以被单测直接覆盖（真实上游的 \r\n\r\n、半包、末条无空行都靠它兜住）。
+ */
+export function createSseParser() {
+  let buf = ''
+  return {
+    /** @returns {string[]} 本次新切出的完整事件块 */
+    push(chunk) {
+      buf = (buf + chunk).replace(/\r\n/g, '\n')
+      const parts = buf.split('\n\n')
+      buf = parts.pop()
+      return parts
+    },
+    /** 流结束时把残留当成一个事件交出去（很多中转的最后一条不带空行） */
+    flush() {
+      const rest = buf.trim() ? [buf] : []
+      buf = ''
+      return rest
+    },
+  }
+}
+
 function streamOnce(opt) {
   return new Promise((resolve, reject) => {
-    let buf = ''
+    const parser = createSseParser()
+    let raw = ''
     let content = ''
     let usage = null
     let fail = null
+    let sawEvent = false
     const calls = []
+
+    const mergeCall = (tc) => {
+      const i = typeof tc.index === 'number' ? tc.index : 0
+      if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
+      if (tc.id) calls[i].id = tc.id
+      if (tc.name) calls[i].name += tc.name
+      if (tc.args) calls[i].args += tc.args
+    }
+
+    const consume = (block) => {
+      const inc = parseSseBlock(block)
+      if (inc.error) {
+        fail = new Error(inc.error)
+        return
+      }
+      if (inc.usage) usage = inc.usage
+      if (inc.content) {
+        sawEvent = true
+        content += inc.content
+        if (opt.onDelta) opt.onDelta(inc.content)
+      }
+      if (inc.toolCalls && inc.toolCalls.length) {
+        sawEvent = true
+        inc.toolCalls.forEach(mergeCall)
+      }
+    }
 
     streamHttp({
       url: opt.url,
@@ -335,47 +457,54 @@ function streamOnce(opt) {
       signal: opt.signal,
       onChunk: (chunk) => {
         if (fail) return
-        buf += chunk
-        const parts = buf.split('\n\n')
-        buf = parts.pop()
-        for (const part of parts) {
-          const line = part.split('\n').find((l) => l.startsWith('data:'))
-          if (!line) continue
-          const data = line.slice(5).trim()
-          if (!data || data === '[DONE]') continue
-          let obj
-          try {
-            obj = JSON.parse(data)
-          } catch (e) {
-            continue
-          }
-          if (obj.error) {
-            fail = new Error(typeof obj.error === 'string' ? obj.error : obj.error.message || '上游错误')
-            return
-          }
-          if (obj.usage) usage = normalizeUsage(obj.usage)
-          const delta = obj.choices && obj.choices[0] && obj.choices[0].delta
-          if (!delta) continue
-          if (delta.content) {
-            content += delta.content
-            if (opt.onDelta) opt.onDelta(delta.content)
-          }
-          if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const i = typeof tc.index === 'number' ? tc.index : 0
-              if (!calls[i]) calls[i] = { id: '', name: '', args: '' }
-              if (tc.id) calls[i].id = tc.id
-              if (tc.function) {
-                if (tc.function.name) calls[i].name += tc.function.name
-                if (tc.function.arguments) calls[i].args += tc.function.arguments
-              }
-            }
-          }
+        raw += chunk
+        for (const part of parser.push(chunk)) {
+          if (fail) return
+          consume(part)
         }
       },
     })
       .then(() => {
         if (fail) return reject(fail)
+
+        // 末条事件常不带结尾空行，残留必须当事件处理，否则最后一个 tool_calls 直接丢
+        for (const part of parser.flush()) {
+          if (fail) return reject(fail)
+          consume(part)
+        }
+        if (fail) return reject(fail)
+
+        // 上游忽略 stream、直接回完整 JSON：按非流式取一次
+        if (!sawEvent && raw.trim()) {
+          try {
+            const j = JSON.parse(raw.replace(/^data:\s*/, '').trim())
+            const choice = j && j.choices && j.choices[0]
+            const msg = choice && (choice.message || choice.delta)
+            if (msg) {
+              if (msg.content) {
+                content += msg.content
+                if (opt.onDelta) opt.onDelta(msg.content)
+              }
+              if (Array.isArray(msg.tool_calls)) {
+                msg.tool_calls.forEach((tc, i) =>
+                  mergeCall({ index: i, id: tc.id, name: tc.function && tc.function.name, args: tc.function && tc.function.arguments })
+                )
+              }
+              if (j.usage) usage = normalizeUsage(j.usage)
+              sawEvent = true
+            }
+          } catch (e) {
+            /* 确实不是 JSON，落到下面统一报错 */
+          }
+        }
+
+        // 拿到字节却什么也没解析出来：不要静默返回空，否则界面只会显示「没有返回内容」
+        if (!sawEvent && raw.trim()) {
+          return reject(
+            new Error('响应格式无法识别：上游返回的既不是 SSE 事件流，也不是完整的 chat/completions JSON。请检查接口地址，或换用支持流式的服务。')
+          )
+        }
+
         resolve({ content, usage, toolCalls: calls.filter(Boolean) })
       })
       .catch(reject)

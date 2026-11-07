@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * AI 助手「不会建待办」的根因探针。
+ * AI 助手「不会建待办」的根因存档。
  *
  * 背景：手机端 AI 走 lib/agent.js 的 streamOnce() 自己解析 SSE，
  * 而桌面端走 Rust 侧实现，所以同一个模型在 PC 上能建待办、手机上不行。
  *
- * 这个脚本把 agent.js:335-374 的解析逻辑原样复刻一份（legacy），
- * 再给出方案里的替换实现（fixed），用 6 种真实存在过的分帧形态对比。
+ * ⚠️ agent.js 已于 2.9.2 修复（抽出 parseSseBlock / createSseParser）。
+ * 本脚本的 legacy 分支复刻的是**修复前**逻辑，用途是证明当时为什么建不了待办，
+ * 不参与当前代码路径。当前实现的回归在 android/tests/ai-parse.test.mjs。
  *
  * 用法：
  *   node _tools/sse-parse-probe.mjs          # 对比表
