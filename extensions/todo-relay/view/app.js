@@ -25,6 +25,16 @@
   var POLL_MS = 4000
   var CFG = { syncIntervalMs: 15000, notifyOnConflict: true, autoIngest: true }
 
+  // 安卓端下载入口：发新版时改这里（与 _tools/release-upload/versions.json 的
+  // android-apk 条目保持一致）。宿主 iframe 没有 allow-popups，target="_blank"
+  // 与 window.open() 都会被静默拦截，所以跳转一律走 api.openExternal。
+  var ANDROID_DL = {
+    version: '2.9.0',
+    size: 187105,
+    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk',
+    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.9.0',
+  }
+
   // ---------------------------------------------------------------- 基础
 
   function svc(path, opts) {
@@ -759,6 +769,54 @@
     } catch (e) { /* 复制失败不影响主流程 */ }
   }
 
+  // ---------------------------------------------------------------- 安卓端下载
+
+  function fmtKB(bytes) {
+    if (!bytes) return ''
+    return Math.round(bytes / 1024) + ' KB'
+  }
+
+  function openLink(url) {
+    if (api && typeof api.openExternal === 'function') {
+      api.openExternal(url).catch(function () {
+        copyText(url)
+        flashCopy('btn-copy-dl', '已复制，请到浏览器打开')
+      })
+      return
+    }
+    // 宿主太旧没有 openExternal：退化成复制链接，至少不让点击毫无反应
+    copyText(url)
+    flashCopy('btn-copy-dl', '已复制，请到浏览器打开')
+  }
+
+  function flashCopy(id, text) {
+    var b = $(id)
+    if (!b) return
+    if (!b.dataset.label) b.dataset.label = b.textContent
+    b.textContent = text
+    setTimeout(function () { b.textContent = b.dataset.label }, 1400)
+  }
+
+  function renderDownload() {
+    var sub = [fmtKB(ANDROID_DL.size), 'GitHub Releases'].filter(Boolean).join(' · ')
+    $('dl-title').textContent = '下载安卓端 v' + ANDROID_DL.version
+    $('dl-sub').textContent = sub
+  }
+
+  function bindDownload() {
+    renderDownload()
+    $('btn-download').addEventListener('click', function () {
+      openLink(ANDROID_DL.apk)
+    })
+    $('btn-copy-dl').addEventListener('click', function () {
+      copyText(ANDROID_DL.apk)
+      flashCopy('btn-copy-dl', '已复制')
+    })
+    $('btn-dl-notes').addEventListener('click', function () {
+      openLink(ANDROID_DL.notes)
+    })
+  }
+
   function ensureAuthBtn() {
     if (document.getElementById('btn-auth')) return
     var actions = document.querySelector('.top-actions')
@@ -854,6 +912,7 @@
 
   bind()
   bindPermButton()
+  bindDownload()
   poll()
   syncOnce()
   setInterval(poll, POLL_MS)

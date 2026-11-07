@@ -288,6 +288,80 @@ body {
 .device .revoke:hover { color: var(--red); background: var(--surface); }
 .device[data-online='1'] .state { color: var(--green); }
 
+/* ---------- 安卓端下载 ---------- */
+/* 整行是一颗按钮：避开了 target="_blank"（宿主 iframe 没有 allow-popups，
+   会被静默拦截），点击走 xhub.openExternal 交给宿主的应用内浏览器。 */
+.dl {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dl:hover { border-color: var(--accent); }
+.dl:active { background: var(--surface); }
+.dl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.dl-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.dl-icon svg { width: 15px; height: 15px; }
+
+.dl-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.dl-title {
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-sub {
+  font-size: 11px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-go { flex: none; color: var(--ink-3); font-size: 12px; }
+.dl:hover .dl-go { color: var(--accent); }
+
+.dl-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.dl-foot .copy {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--well);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.dl-foot .copy:hover { color: var(--accent); border-color: var(--accent); }
+.dl-foot .link { margin-left: auto; }
+
 /* ---------- 待办 ---------- */
 .todos { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
 .todo {
