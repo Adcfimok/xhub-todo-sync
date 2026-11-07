@@ -7,6 +7,8 @@ export const meta = { title: '我的', route: 'more' }
 let rootEl = null
 
 const ITEMS = [
+  // 笔记已从底栏移出，「我的」是它的主入口（另外两处在首页：最近笔记、统计格）
+  { route: 'notes', title: '笔记', desc: '长文本，正文同步到电脑', col: 'notes', icon: '▦' },
   { route: 'stickies', title: '便签', desc: '电脑上的两块便签', col: 'stickies', icon: '▤' },
   { route: 'resources', title: '速达', desc: '网页与常用入口', col: 'resources', icon: '◎' },
   { route: 'snippets', title: '提示词', desc: '常用话术一键复制', col: 'snippets', icon: '⌘' },

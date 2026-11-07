@@ -93,9 +93,9 @@ function render() {
     )
   }
 
-  // 最近笔记
+  // 最近笔记（笔记已移出底栏，这里的每一行和「全部」都是入口）
   scroll.appendChild(section('最近笔记', 'notes', notes.slice(0, 3), (n) =>
-    h('div', { class: 'mini-row' }, [
+    h('div', { class: 'mini-row', onclick: () => go('notes') }, [
       h('span', { class: 'mini-t', text: n.title || '无标题笔记' }),
       h('span', { class: 'mini-m', text: fmtAgo(n.updatedAt) }),
     ])

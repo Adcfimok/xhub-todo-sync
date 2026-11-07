@@ -1,7 +1,8 @@
 import { boot, S, onChange } from './lib/core.js'
 import { initAlerts } from './lib/alerts.js'
 import { closeSheet, toast } from './lib/ui.js'
-import { runQuickAdd, resetQuickAdd } from './lib/quickadd.js'
+import { runQuickAdd, resetQuickAdd, setQuickAddFallback } from './lib/quickadd.js'
+import { openTodoForm } from './lib/todoform.js'
 import * as home from './pages/home.js'
 import * as todos from './pages/todos.js'
 import * as notes from './pages/notes.js'
@@ -17,20 +18,21 @@ import * as ext from './pages/ext.js'
 import * as settings from './pages/settings.js'
 
 const PAGES = { home, todos, notes, ai, more, calendar, account, pomodoro, stickies, resources, snippets, ext, settings }
-const TAB_OF = { home: 'home', todos: 'todos', notes: 'notes', ai: 'ai', more: 'more' }
-// 二级页 → 返回目标：日历从首页进，其余从「更多」进
+const TAB_OF = { home: 'home', todos: 'todos', ai: 'ai', more: 'more' }
 // 二级页 → 固定返回目标；没写的（如笔记，可能从首页也可能从「我的」进）按来源回退
 const BACK_TO = { calendar: 'home', account: 'more', pomodoro: 'ext', stickies: 'more', resources: 'more', snippets: 'more', ext: 'more', settings: 'more' }
-const SUB_PAGES = { calendar: 1, account: 1, pomodoro: 1, stickies: 1, resources: 1, snippets: 1, ext: 1, settings: 1 }
+// 笔记不再是底栏页，但它有固定入口（我的 / 首页两处），所以要按二级页处理：
+// 只有进了 SUB_PAGES，返回键才会退回来源页，而不是一律回首页。
+const SUB_PAGES = { calendar: 1, account: 1, pomodoro: 1, stickies: 1, resources: 1, snippets: 1, ext: 1, settings: 1, notes: 1 }
 
 const pageEl = document.getElementById('page')
 const titleEl = document.getElementById('page-title')
 const backEl = document.getElementById('btn-back')
 const tabbarEl = document.getElementById('tabbar')
-// 底栏 6 个格子：首页 / 待办 / 笔记 / ＋ / AI / 我的，第 4 格是动作不参与切页
-const SLOT_ROUTE = ['home', 'todos', 'notes', null, 'ai', 'more']
-const TAB_SLOTS = { home: 0, todos: 1, notes: 2, ai: 4, more: 5 }
-const VALID_SLOTS = [0, 1, 2, 4, 5]
+// 底栏 5 个格子：首页 / 待办 / ＋ / AI / 我的，第 3 格是动作不参与切页
+const SLOT_ROUTE = ['home', 'todos', null, 'ai', 'more']
+const TAB_SLOTS = { home: 0, todos: 1, ai: 3, more: 4 }
+const VALID_SLOTS = [0, 1, 3, 4]
 const chipEl = document.getElementById('status-chip')
 const textEl = document.getElementById('status-text')
 
@@ -66,15 +68,22 @@ function render(force) {
   document.body.dataset.route = name
   const page = PAGES[name]
   titleEl.textContent = page.meta.title
+  // 笔记已移出底栏；它和其它二级页一样按来源定高亮（从首页进就亮首页，从「我的」进就亮「我的」）
+  const activeTab = TAB_OF[name] || BACK_TO[name] || (SUB_PAGES[name] ? TAB_OF[prevRoute] || 'more' : 'home')
   backEl.hidden = !SUB_PAGES[name]
 
-  const activeTab = TAB_OF[name] || BACK_TO[name] || 'home'
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('on', t.getAttribute('data-route') === activeTab)
   })
   if (tabbarEl) {
     const slot = TAB_SLOTS[activeTab]
     tabbarEl.style.setProperty('--tab-i', String(slot == null ? 0 : slot))
+    // 切页脉冲：高亮块从一个格子「跳」到另一个格子时，放大 + 炫彩一次
+    tabbarEl.classList.remove('switching')
+    void tabbarEl.offsetWidth
+    tabbarEl.classList.add('switching')
+    clearTimeout(render._pulse)
+    render._pulse = setTimeout(() => tabbarEl.classList.remove('switching'), 300)
   }
 
   pageEl.innerHTML = ''
@@ -90,6 +99,43 @@ function syncChip() {
   textEl.textContent = S.statusText
 }
 
+// ---------------------------------------------------------------- 新建类型选择
+
+const addMask = document.getElementById('add-mask')
+const addPicker = document.getElementById('add-picker')
+
+export function closeAddPicker() {
+  if (addMask) addMask.hidden = true
+  if (addPicker) addPicker.hidden = true
+}
+
+/**
+ * 底栏「＋」的默认动作：先选类型，再进对应表单。
+ * 待办 / 笔记 / 提示词是三个最常新建的集合，其余（速达、便签）偏配置，不放进这里。
+ */
+export function openAddPicker() {
+  if (!addPicker) return
+  addMask.hidden = false
+  addPicker.hidden = false
+}
+
+function bindAddPicker() {
+  if (!addPicker) return
+  addMask.addEventListener('click', closeAddPicker)
+  addPicker.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('.add-item') : null
+    if (!btn) return
+    const type = btn.getAttribute('data-type')
+    closeAddPicker()
+    // 等面板收起再开表单，避免两层遮罩叠在一起、返回键一次只关一层
+    setTimeout(() => {
+      if (type === 'todos') openTodoForm(null)
+      else if (type === 'notes') notes.openEditor(null)
+      else if (type === 'snippets') snippets.openEditor(null)
+    }, 140)
+  })
+}
+
 function start() {
   document.querySelectorAll('.tab').forEach((t) => {
     t.addEventListener('click', () => go(t.getAttribute('data-route')))
@@ -97,6 +143,8 @@ function start() {
   backEl.addEventListener('click', () => go(BACK_TO[current] || prevRoute || 'more'))
   const addBtn = document.getElementById('btn-quick-add')
   if (addBtn) addBtn.addEventListener('click', () => runQuickAdd())
+  setQuickAddFallback(openAddPicker)
+  bindAddPicker()
   chipEl.addEventListener('click', () => go('settings'))
   window.addEventListener('hashchange', () => render())
   initTabGesture()
@@ -125,6 +173,11 @@ function start() {
 
 // 安卓返回键：先关面板 / 子页，返回 false 时交给系统
 window.__handleBack = function () {
+  // 类型选择是最上层，先关它
+  if (addPicker && !addPicker.hidden) {
+    closeAddPicker()
+    return true
+  }
   const sheet = document.getElementById('sheet')
   if (sheet && !sheet.hidden) {
     closeSheet()
@@ -231,6 +284,9 @@ function initTabGesture() {
       if (d < min) d = min + (d - min) * 0.32
       if (d > max) d = max + (d - max) * 0.32
       tabbarEl.style.setProperty('--drag', d.toFixed(1) + 'px')
+      // 拖动进度 0~1：拖满一格即到顶，高亮块的放大与色散都按这个值走
+      const p = Math.min(1, Math.abs(d) / unit)
+      tabbarEl.style.setProperty('--drag-p', p.toFixed(3))
       if (e.cancelable) e.preventDefault()
     },
     { passive: false }
@@ -244,6 +300,7 @@ function initTabGesture() {
     pid = null
     tabbarEl.classList.remove('dragging')
     tabbarEl.style.setProperty('--drag', '0px')
+    tabbarEl.style.setProperty('--drag-p', '0')
     if (!wasDragging) return
 
     // 拖完的那次 click 不该再触发 tab 切换

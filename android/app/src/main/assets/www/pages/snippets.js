@@ -10,7 +10,7 @@ let q = ''
 
 export function mount(root) {
   rootEl = root
-  setQuickAdd(() => edit(null))
+  setQuickAdd(() => openEditor(null))
   render()
   off = onChange(render)
   return () => off && off()
@@ -50,7 +50,7 @@ function render() {
 
   list.forEach((s) => {
     scroll.appendChild(
-      h('div', { class: 'snip', onclick: () => edit(s) }, [
+      h('div', { class: 'snip', onclick: () => openEditor(s) }, [
         h('div', { class: 'sn-head' }, [
           h('span', { class: 'sn-t', text: s.title || '未命名' }),
           s.pinned ? h('span', { class: 'pin', text: '置顶' }) : null,
@@ -89,7 +89,7 @@ function copy(text) {
   )
 }
 
-function edit(s) {
+export function openEditor(s) {
   const base = s || null
   openForm({
     title: s ? '编辑提示词' : '新增提示词',

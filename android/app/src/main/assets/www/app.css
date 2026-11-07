@@ -321,7 +321,7 @@ input, textarea { user-select: text; }
   height: var(--dock-h);
   padding: 0 6px;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   align-items: center;
   border-radius: 29px;
   background: var(--glass);
@@ -361,24 +361,78 @@ input, textarea { user-select: text; }
   z-index: 0;
 }
 
-/* 选中态：药丸高亮，随手指拖动 */
+/* 选中态：药丸高亮，随手指拖动
+   位移与缩放拆成两层：外层只做 translateX（跟随 --tab-i / --drag），
+   内层 <i> 只做 scale（跟随 --drag-p）。两层各管一个 transform，
+   既不会互相覆盖，也不依赖 scale/translate 这类较新的独立变换属性。 */
 .tab-indicator {
   position: absolute;
   left: 6px;
   top: 5px;
-  width: calc((100% - 12px) / 6);
+  width: calc((100% - 12px) / 5);
   height: 48px;
   border-radius: 999px;
-  background: var(--glass-sel-hi);
-  border: 1px solid var(--glass-sel-line);
-  box-shadow:
-    0 2px 12px rgba(0, 0, 0, .10),
-    inset 0 1px 0 var(--glass-hi);
   transform: translateX(calc(var(--tab-i, 0) * 100% + var(--drag, 0px)));
   transition: transform .34s cubic-bezier(.22, .9, .28, 1);
   pointer-events: none;
   z-index: 0;
   will-change: transform;
+}
+
+/* 高亮块本体：磨砂玻璃 + 拖动时放大成水泡 */
+.tab-indicator > i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--glass-sel-hi);
+  border: 1px solid var(--glass-sel-line);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, .10),
+    inset 0 1px 0 var(--glass-hi);
+  /* --drag-p 由 JS 按「拖了多少比例」写 0~1；松手归零时靠这行平滑回落 */
+  transform: scale(calc(1 + var(--drag-p, 0) * 0.15));
+  transition: transform .24s cubic-bezier(.22, .9, .28, 1), border-radius .24s ease;
+}
+
+/* 炫彩色散：边缘一圈被棱镜拆开的彩虹光，拖动时浮出来。
+   只在拖动 / 切页瞬间可见——静止时是纯白玻璃，不抢内容。
+   中心用 radial mask 挖空，只留边缘一圈：整块染成彩色会像故障，不像玻璃。 */
+.tab-indicator > i::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from 0deg,
+    #ff9f43, #ffd166, #06d6a0, #4cc9f0, #7b61ff, #ef476f, #ff9f43
+  );
+  filter: blur(9px) saturate(175%);
+  -webkit-mask: radial-gradient(closest-side, transparent 57%, #000 91%);
+  mask: radial-gradient(closest-side, transparent 57%, #000 91%);
+  opacity: 0;
+  transition: opacity .22s ease;
+  pointer-events: none;
+  /* 压在玻璃背景之上：色散在边缘露出一圈，中心仍是干净的磨砂白 */
+  z-index: 1;
+}
+/* 拖动中：色散跟着拖动进度出现，拖得越远越明显 */
+.tabbar.dragging .tab-indicator > i::before {
+  opacity: calc(var(--drag-p, 0) * 0.76);
+}
+.tabbar.dragging .tab-indicator > i {
+  border-radius: 46%;
+}
+/* 点按切页：先鼓一下再回弹，色散同步闪一次（.switching 由路由层加/删） */
+.tabbar.switching .tab-indicator > i {
+  /* 鼓起比回落快：0.14s 弹起，移除类后按基线的 0.24s 慢慢收回去 */
+  transition: transform .14s cubic-bezier(.3, .9, .3, 1), border-radius .14s ease;
+  transform: scale(1.14);
+  border-radius: 44%;
+}
+.tabbar.switching .tab-indicator > i::before {
+  opacity: .7;
 }
 /* 拖拽时关掉缓动，手指与高亮块严格同帧 */
 .tabbar.dragging .tab-indicator { transition: none; }
@@ -436,8 +490,72 @@ input, textarea { user-select: text; }
 }
 .tab-add svg { width: 24px; height: 24px; }
 .tab-add:active { transform: scale(.93); }
+
+/* ---------- 新建类型选择（底栏 ＋ 的落点） ---------- */
+/* 笔记移出底栏后，三个集合的入口收在这里：先选类型，再进对应表单。
+   浮在底栏上方而不是盖住它——底栏仍是导航，不该被临时面板遮死。 */
+.add-mask {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, .42);
+  z-index: 22;
+  animation: fade .16s ease-out;
+}
+.add-picker {
+  position: fixed;
+  left: 8px; right: 8px;
+  bottom: calc(var(--dock-lift) + var(--dock-h) + 12px + var(--safe-b));
+  z-index: 23;
+  padding: 0 12px 12px;
+  border-radius: 22px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, .34);
+  animation: up .24s cubic-bezier(.2, .8, .3, 1);
+}
+.add-head {
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 2px 4px 8px;
+  letter-spacing: .04em;
+}
+.add-list { display: flex; flex-direction: column; gap: 8px; }
+.add-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .12s ease, background .18s;
+  -webkit-tap-highlight-color: transparent;
+}
+.add-item:active { transform: scale(.985); background: var(--glass-sel); }
+.ai-ic {
+  flex: none;
+  width: 34px; height: 34px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: var(--glass-sel);
+  border: 1px solid var(--line);
+  color: var(--accent);
+}
+.ai-ic svg { width: 19px; height: 19px; }
+.ai-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.ai-t { font-size: 14px; font-weight: 600; }
+.ai-d { font-size: 11.5px; color: var(--ink-3); }
+.ai-go { color: var(--ink-3); font-size: 18px; line-height: 1; }
+
 @media (prefers-reduced-motion: reduce) {
-  .tab-indicator, .tab svg, .tab-add { transition: none; }
+  .tab-indicator, .tab-indicator > i, .tab-indicator > i::before, .tab svg, .tab-add { transition: none; }
+  .tabbar.switching .tab-indicator > i { transform: none; }
+  .add-picker, .add-mask { animation: none; }
 }
 /* 横屏 / 矮屏（高 ≤480px）：竖握前提不成立，抬 44px 会挤掉正文，收回贴边 */
 @media (max-height: 480px) {

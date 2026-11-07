@@ -11,7 +11,7 @@ let q = ''
 export function mount(root) {
   rootEl = root
   // 底栏中央 + 在笔记页 = 新建笔记
-  setQuickAdd(() => edit(null))
+  setQuickAdd(() => openEditor(null))
   render()
   off = onChange(render)
   return () => off && off()
@@ -47,7 +47,7 @@ function render() {
 
   list.forEach((n) => {
     scroll.appendChild(
-      h('div', { class: 'note-card', onclick: () => edit(n) }, [
+      h('div', { class: 'note-card', onclick: () => openEditor(n) }, [
         h('div', { class: 'nc-t', text: n.title || '无标题笔记' }),
         h('div', { class: 'nc-s', text: (n.content || '').replace(/\s+/g, ' ').slice(0, 72) || '（空）' }),
         h('div', { class: 'nc-m' }, [h('span', { text: fmtAgo(n.updatedAt) }), n.dirty ? h('span', { class: 'pend', text: '待同步' }) : null]),
@@ -57,7 +57,7 @@ function render() {
   scroll.appendChild(h('div', { class: 'list-pad' }))
 }
 
-function edit(n) {
+export function openEditor(n) {
   const base = n || null
   openForm({
     title: n ? '编辑笔记' : '新建笔记',
