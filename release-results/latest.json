@@ -11,7 +11,8 @@
     "android-apk-2.8.0",
     "android-apk-2.9.0",
     "android-apk-2.9.1",
-    "android-apk-2.9.2"
+    "android-apk-2.9.2",
+    "android-apk-2.10.0"
   ],
   "results": [
     {
@@ -165,23 +166,41 @@
       "file": "android/todo-link-2.9.2.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 191201,
       "sha256": "fc2115fcc5f6958307ddb587387cb73b7a57c41250c4390edfcc6660e3f205a3",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.2/todo-link-2.9.2.apk",
-      "uploadedAt": "2026-11-07T11:36:41.987Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.9.2",
       "commit": "81fc5524d53a884296f424cebff34d7e81cc9662",
       "notes": "# 待办同步 · 安卓端 v2.9.2\n\n修复版：AI 助手终于能真正建待办了。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 15 |\n| versionName | 2.9.2 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `fc2115fcc5f6958307ddb587387cb73b7a57c41250c4390edfcc6660e3f205a3` |\n| 大小 | 191,201 字节 |\n\n## 本版变更\n\n只有一项：**修复 AI 助手「只聊天、不建待办」**。\n\n先说现象：手机上对助手说「明天下午三点提醒我交房租」，它回一段话，但待办列表里什么都没有；换成电脑端同一个模型、同一句话，待办能正常建出来。\n\n原因不在模型，在手机端的流式解析。\n\n手机端 AI 的响应是 `lib/agent.js` 自己解析的（桌面端走 Rust 侧实现，是另一套代码，所以同场景正常）。这段解析原来有三处硬伤：\n\n1. 只按 `\\n\\n` 切分事件。经 Cloudflare 或多数中转网关后，分隔符会变成 `\\r\\n\\r\\n`，于是一条都切不开。\n2. 一个事件里只取第一行 `data:`。SSE 规范允许续行，多行时参数被截断。\n3. 流结束时把残留 buffer 直接丢掉。很多中转的最后一条事件不带结尾空行，最后那个 `tool_calls` 就没了。\n\n后果是同一条链：**解析不出事件 → 工具调用列表恒为空 → agent 循环第一轮就返回 → 模型收不到工具结果，界面只显示一句聊天**。用户看到的就是「AI 说它记住了，其实什么都没发生」。\n\n修复内容：\n\n- 抽出 `parseSseBlock()`：多行 `data:` 按 `\\n` 拼接；`delta`（流式分片）与 `message`（非流式整包）走同一出口，避免两套代码漂移。\n- 抽出 `createSseParser()`：先做 `\\r\\n → \\n` 归一化再切分，流结束时 `flush()` 把残留当事件处理。\n- 上游忽略 `stream`、直接回完整 JSON 时，按非流式对象解析一次。\n- 拿到字节却什么也没解析出来时，明确报「响应格式无法识别」，不再静默返回空内容。\n\n## 验证\n\n新增 `android/tests/ai-parse.test.mjs`，18 项断言，覆盖 7 种真实分帧形态：\n\n| 形态 | 修复前 | 修复后 |\n| --- | --- | --- |\n| 官方 `\\n\\n`、参数分两片 | 通过 | 通过 |\n| 中转 `\\r\\n\\r\\n` | **失败（残留 160 字节）** | 通过 |\n| 唯一一条事件、结尾无空行 | **失败** | 通过 |\n| 中转忽略 `stream`、回完整 JSON | **失败** | 通过 |\n| `tool` 事件有空行、`[DONE]` 没有 | 通过 | 通过 |\n| 事件被 TCP 切成两半 | 通过 | 通过 |\n| 同一事件内多行 `data:` | **失败** | 通过 |\n\n```\nnode --experimental-default-type=module --test android/tests/ai-parse.test.mjs\n# tests 18 / pass 18 / fail 0\n```\n\n`_tools/sse-parse-probe.mjs` 保留了修复前的逻辑复刻，可复跑对比（legacy 4/7 失败，现实现 7/7 通过）。\n\n## 升级说明\n\n与 2.9.0 / 2.9.1 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**。不需要重新配对，AI 的接口地址与 Key 也不用重填。\n\n## 安装\n\n1. 下载 `todo-link-2.9.2.apk`，允许「安装未知来源应用」。\n2. 覆盖安装。\n3. 打开 AI 页，说一句「明天下午三点交房租」，确认待办列表出现该条。\n\n## 已知限制\n\n- 若当前模型本身不支持函数调用（如部分推理模型），仍不会建待办——这类模型会明确报错，不会假装成功。换 `deepseek-chat` / `gpt-4o-mini` 一类支持 tools 的模型即可。\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现）。\n- 番茄钟仍是固定 25/5 分钟，自定义时长与提醒时间设置随 3.0.0 一起做（见 `docs/11`）。",
       "releaseName": "待办同步 安卓端 v2.9.2"
+    },
+    {
+      "id": "android-apk-2.10.0",
+      "version": "2.10.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.10.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 191201,
+      "sha256": "fce0680890ef72aae5bab3fc33ffb4361a3e79702cdcce3b29cc35ccba1761de",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.10.0/todo-link-2.10.0.apk",
+      "uploadedAt": "2026-11-07T12:10:59.436Z",
+      "tag": "android-v2.10.0",
+      "commit": "7fa8e385143aeb7ffdf864a856f2c84378410059",
+      "notes": "# 待办同步 · 安卓端 v2.10.0\n\n导航改版：底栏从 6 格收成 5 格，笔记搬到「我的」与首页，加号改成先选类型；底栏高亮块加入放大与彩虹色散动效。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 16 |\n| versionName | 2.10.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `fce0680890ef72aae5bab3fc33ffb4361a3e79702cdcce3b29cc35ccba1761de` |\n| 大小 | 191,201 字节 |\n\n## 本版变更\n\n### 1. 底栏收成 5 格\n\n`首页 / 待办 / ＋ / AI / 我的`。笔记不再占底栏格子，但功能没少——它变成了二级页，入口挪到三处。\n\n改的时候同步改了四个常量（`SLOT_ROUTE`、`TAB_SLOTS`、`VALID_SLOTS`、`TAB_OF`）和两处样式（网格列数、高亮块宽度）。高亮块的位移仍按「第几格 × 自身宽度」算，所以格数变了不用改公式，但**必须实测**——这类改动最容易出的问题就是高亮块压在格子缝上。\n\n### 2. 笔记的三处入口\n\n| 入口 | 位置 |\n| --- | --- |\n| 「我的」菜单第一项 | 带条目数量角标 |\n| 首页统计格「笔记」 | 四宫格第二个 |\n| 首页「最近笔记」卡片 | 每一行可点，「全部」按钮也进得去 |\n\n笔记现在按二级页处理：返回键回到进来时的页面（从首页进就回首页，从「我的」进就回「我的」），底栏高亮也跟着来源走。以前它是底栏页，这段逻辑不存在，不补的话从「我的」进去按返回会直接跳回首页。\n\n### 3. 加号改成先选类型\n\n点＋弹出「待办 / 笔记 / 提示词」三项，选完再进对应表单。这是笔记移出底栏后的必要路径——否则新建笔记只能从「我的」逐层点进去。\n\n页面自己有新建语义时仍然优先：在待办页点＋直接建待办，在日历页点＋按选中的那天建待办，不会弹选择器。\n\n### 4. 底栏动效\n\n参考给的示例视频（酷安底栏）做的，三件事：\n\n- **拖动放大**：高亮块跟着手指移动时按拖动进度放大，拖满一格到 1.15 倍，松手回落到原尺寸。块本身也从圆角矩形变成更接近圆形（`border-radius` 过渡到 46%）。\n- **边缘彩虹色散**：拖动时高亮块边缘浮出一圈 conic 渐变（橙→黄→绿→青→蓝→紫），`blur(9px)` 柔化，中心用 radial mask 挖空——只留一圈光，不把整块染成彩色。拖得越远越明显，静止时完全不可见。\n- **切页脉冲**：点按切换页面时，高亮块先快速鼓起（0.14 秒到 1.14 倍）再慢慢收回（0.24 秒），色散同步闪一次。\n\n实现上把位移和缩放拆成两层：外层 `.tab-indicator` 只做 `translateX`，内层 `<i>` 只做 `scale`。两层各管一个 `transform`，互不覆盖，也不依赖 `scale`/`translate` 这类较新的独立变换属性，老 WebView 上降级只丢动效、不丢布局。\n\n系统开启「减弱动态效果」时，以上动效全部关闭。\n\n## 验证\n\n新增 `_tools/nav-v5-check.mjs`，3 个视口 × 2 个主题 × 21 项断言：\n\n| 检查组 | 断言 |\n| --- | --- |\n| 结构 | 4 个页面格、5 列网格、无 notes 格、加号存在 |\n| 对齐 | 逐个切到 待办/AI/我的/首页，高亮块中心与格子中心偏差 ≤2px；块宽 = 1/5 栏宽 |\n| 动效 | 静止 scale=1；拖 50% 得 1.075；拖满 1.15；切页 1.14；色散 conic 存在；静止 opacity=0；切页 opacity>0.5 |\n| 入口 | 三处均能进入 `#/notes`；从「我的」进笔记后返回回「我的」 |\n| 类型面板 | 弹出可见、三项齐全、不盖底栏、选完自动收起并打开「新建笔记」 |\n\n实测结果：**三个视口的高亮块中心偏差全部为 0px**（不是\"在容差内\"，是完全重合），21 项断言全过。\n\n另跑 `navbar-check.mjs`（底栏离屏幕距离、内容不被遮、AI 输入区位置）5 个视口全过，说明改格数没有破坏 2.9.0 建立的悬浮几何。\n\n```\nnode _tools/nav-v5-check.mjs            # 浅色\nnode _tools/nav-v5-check.mjs --dark     # 深色\nnode _tools/navbar-check.mjs            # 几何回归\n```\n\n## 升级说明\n\n与 2.9.x 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**，不需要重新配对。\n\n底栏少了一个格子，如果之前习惯从底栏进笔记：现在走「我的 → 笔记」，或首页的「笔记」统计格 / 「最近笔记 → 全部」。\n\n## 已知限制\n\n- 类型选择器只放待办 / 笔记 / 提示词三项。速达与便签偏配置、不常新建，仍从「我的」进。\n- 色散在浅色主题下比深色主题淡（白色背景上彩光对比度天然更低），这是配色结果，不是渲染差异。\n- 其余七项（提醒时间、番茄钟自定义、强提醒、节日模块、首页时钟、增删入口改造）随 3.0.0 一起，见 `docs/11`。",
+      "releaseName": "待办同步 安卓端 v2.10.0"
     }
   ],
   "counts": {
-    "total": 9,
+    "total": 10,
     "success": 1,
     "failed": 0,
-    "skipped": 8,
+    "skipped": 9,
     "unprocessed": 0
   },
   "failure": null,
@@ -189,6 +208,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T11:36:37.854Z",
-  "finishedAt": "2026-11-07T11:36:41.987Z"
+  "startedAt": "2026-11-07T12:10:54.875Z",
+  "finishedAt": "2026-11-07T12:10:59.436Z"
 }
