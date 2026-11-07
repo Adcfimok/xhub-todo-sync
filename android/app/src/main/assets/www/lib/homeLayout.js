@@ -9,8 +9,8 @@
 
 export const GRID_COLS = 4
 export const ROW_H = 78
-/** 布局结构版本：v2 起统计卡与「每日一句」同为 4×1，v1 时代统计是 4×2 */
-export const LAYOUT_V = 2
+/** 布局结构版本：v2 起统计卡与「每日一句」同为 4×1；v3 起升级时向上压实，补齐收高留下的空行 */
+export const LAYOUT_V = 3
 
 /** 卡片目录：minW/minH 是内容能完整显示的下限 */
 export const CARD_DEFS = [
@@ -81,16 +81,47 @@ function collapseStats(items) {
 }
 
 /**
- * 老布局升级：v1 时代（2.11.x / 2.12.x）统计卡默认 2 行，
- * 2.12.2 起统一成 1 行与名言对齐，这里把「正好 2 行」的统计卡收成 1 行。
- * 只认 2 行：用户自己拉到 3 行以上的不动。
+ * 向上压实（升级用）：卡片只会往上挪进空位，不会横向移动或下移。
+ * 统计卡从 2 行收成 1 行后，下面各卡的 y 还是老的，中间会空出一整行 —— 就是用户截图里那道缝。
+ */
+function pullUp(items) {
+  const ordered = items
+    .filter(Boolean)
+    .map((it) => ({
+      id: it.id,
+      x: Math.max(0, Math.min(GRID_COLS - 1, Math.round(Number(it.x) || 0))),
+      y: Math.max(0, Math.round(Number(it.y) || 0)),
+      w: Math.max(1, Math.min(GRID_COLS, Math.round(Number(it.w) || 1))),
+      h: Math.max(1, Math.round(Number(it.h) || 1)),
+    }))
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+
+  const placed = []
+  ordered.forEach((it) => {
+    const cand = (y) => ({ id: it.id, x: it.x, y, w: it.w, h: it.h })
+    let y = it.y
+    while (y > 0 && isFree(placed, cand(y - 1), it.id)) y--
+    placed.push(cand(y))
+  })
+  return placed
+}
+
+/**
+ * 老布局升级：
+ * - v1 → v2：2.11.x/2.12.x 的统计卡默认 2 行，收成 1 行与名言对齐（用户拉到 3 行以上的不动）
+ * - v2 → v3：收高后会空出一行，整体向上压实，把首页中间那道缝补齐
  */
 function upgradeLayout(raw) {
-  if (!raw || !Array.isArray(raw.items) || Number(raw.v) >= LAYOUT_V) return raw
-  const items = raw.items.map((it) =>
-    it && it.id === 'stats' && Number(it.h) === 2 ? Object.assign({}, it, { h: 1 }) : it
-  )
-  return { v: LAYOUT_V, items }
+  if (!raw || !Array.isArray(raw.items)) return raw
+  const v = Number(raw.v) || 0
+  if (v >= LAYOUT_V) return raw
+  let items = raw.items.filter(Boolean)
+  if (v < 2) {
+    items = items.map((it) =>
+      it.id === 'stats' && Number(it.h) === 2 ? Object.assign({}, it, { h: 1 }) : it
+    )
+  }
+  return { v: LAYOUT_V, items: pullUp(items) }
 }
 
 function clampInt(v, lo, hi, fb) {
@@ -173,18 +204,7 @@ export function needsUpgrade(raw) {
  * 所以在「增删卡」时压实；手动拖动时不动，尊重用户摆的位置。
  */
 export function compact(layout) {
-  const ordered = layout.items.slice().sort((a, b) => a.y - b.y || a.x - b.x)
-  const placed = []
-  ordered.forEach((it) => {
-    let y = it.y
-    while (y > 0) {
-      const cand = { id: it.id, x: it.x, y: y - 1, w: it.w, h: it.h }
-      if (isFree(placed, cand, it.id)) y--
-      else break
-    }
-    placed.push({ id: it.id, x: it.x, y, w: it.w, h: it.h })
-  })
-  return normalizeLayout({ items: placed })
+  return normalizeLayout({ items: pullUp(layout.items) })
 }
 
 export function removeCard(layout, id) {

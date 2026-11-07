@@ -61,7 +61,7 @@ test('默认布局：统计紧跟名言、同为 1 行，日历接在下面', ()
   assert.equal(quote.y + quote.h, stats.y, '统计紧贴名言下一行')
   const cal = layout.items.find((i) => i.id === 'calendar')
   assert.equal(cal.y, 2)
-  assert.equal(layout.v, 2)
+  assert.equal(layout.v, 3)
   noOverlap(layout.items)
   inGrid(layout.items)
 })
@@ -74,7 +74,7 @@ test('卡片目录共 10 项，卡片库与 2.11.1 一致', () => {
   )
 })
 
-test('v1 布局里 2 行的统计卡，载入后收成 1 行并标记为 v2', () => {
+test('v1 布局里 2 行的统计卡，载入后收成 1 行并标记为 v3', () => {
   const v1 = {
     v: 1,
     items: [
@@ -91,10 +91,52 @@ test('v1 布局里 2 行的统计卡，载入后收成 1 行并标记为 v2', ()
   assert.deepEqual({ y: stats.y, h: stats.h }, { y: 1, h: 1 })
   const cal = out.items.find((i) => i.id === 'calendar')
   assert.ok(cal.y >= 2 && cal.y <= 3, '日历上移或保持原位，不与其他卡重叠')
-  assert.equal(out.v, 2)
+  assert.equal(out.v, 3)
   assert.equal(needsUpgrade(out), false, '回写后不应再升级')
   noOverlap(out.items)
   inGrid(out.items)
+})
+
+test('v2 布局里收高留下的空行会被压实（用户截图里的那道缝）', () => {
+  // 2.12.2 收高后写回的存档：统计 1 行在 y1，日历还停在 y3，中间空一行
+  const v2 = {
+    v: 2,
+    items: [
+      { id: 'quote', x: 0, y: 0, w: 4, h: 1 },
+      { id: 'stats', x: 0, y: 1, w: 4, h: 1 },
+      { id: 'calendar', x: 0, y: 3, w: 4, h: 3 },
+      { id: 'today', x: 0, y: 6, w: 2, h: 2 },
+      { id: 'holidays', x: 2, y: 6, w: 2, h: 2 },
+    ],
+  }
+  assert.equal(needsUpgrade(v2), true)
+  const out = loadLayout(v2)
+  const at = (id) => out.items.find((i) => i.id === id)
+  assert.equal(at('stats').y, 1)
+  assert.equal(at('calendar').y, 2, '日历应紧贴统计卡，不留空行')
+  assert.equal(at('today').y, 5)
+  assert.equal(at('holidays').y, 5)
+  assert.equal(out.v, 3)
+  noOverlap(out.items)
+  inGrid(out.items)
+})
+
+test('压实时只往上挪，不会改变卡片之间的上下顺序', () => {
+  const out = loadLayout({
+    v: 2,
+    items: [
+      { id: 'quote', x: 0, y: 0, w: 4, h: 1 },
+      { id: 'stats', x: 0, y: 1, w: 4, h: 1 },
+      { id: 'calendar', x: 0, y: 4, w: 4, h: 3 },
+      { id: 'today', x: 0, y: 9, w: 2, h: 2 },
+    ],
+  })
+  assert.deepEqual(
+    out.items.slice().sort((a, b) => a.y - b.y).map((i) => i.id),
+    ['quote', 'stats', 'calendar', 'today']
+  )
+  assert.equal(out.items.find((i) => i.id === 'calendar').y, 2)
+  assert.equal(out.items.find((i) => i.id === 'today').y, 5)
 })
 
 test('用户自己拉到 3 行以上的统计卡不被强行改回 1 行', () => {

@@ -113,7 +113,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.2',
+      appVersion: () => '2.12.3',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -187,6 +187,38 @@ for (const v of VIEWPORTS) {
       statsGeo.cells.every((c) => c.inside && !c.clipped),
     statsGeo ? statsGeo.cells.map((c) => `${c.label}:${c.inside && !c.clipped ? 'ok' : 'FAIL'}`).join(' ') : '未找到格子'
   )
+
+  // 卡片之间不能留空行：每张卡的正上方必须有邻居（y=0 除外），否则就是收高/删卡留下的缝
+  const gaps = await page.evaluate(() => {
+    const parse = (s) => {
+      const m = /^(\d+)\s*\/\s*span\s+(\d+)$/.exec(s || '')
+      return m ? { a: Number(m[1]), n: Number(m[2]) } : null
+    }
+    const cards = [...document.querySelectorAll('.home-grid .hc')].map((el) => {
+      const r = parse(el.style.gridRow)
+      const c = parse(el.style.gridColumn)
+      return {
+        id: el.getAttribute('data-card'),
+        x: c ? c.a - 1 : 0,
+        w: c ? c.n : 1,
+        y: r ? r.a - 1 : 0,
+        h: r ? r.n : 1,
+      }
+    })
+    const used = new Set()
+    cards.forEach((c) => {
+      for (let i = 0; i < c.w; i++) for (let j = 0; j < c.h; j++) used.add(c.x + i + ',' + (c.y + j))
+    })
+    const floating = cards
+      .filter((c) => {
+        if (c.y === 0) return false
+        for (let i = 0; i < c.w; i++) if (used.has(c.x + i + ',' + (c.y - 1))) return false
+        return true
+      })
+      .map((c) => c.id)
+    return { floating, count: cards.length }
+  })
+  check(`${v.name} 卡片之间没有空行`, gaps.count > 0 && gaps.floating.length === 0, gaps.floating.join(',') || 'ok')
 
   // 时间与问好必须落在同一行：水平相邻 + 垂直重叠
   const heroGeo = await page.evaluate(() => {
@@ -383,7 +415,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.2',
+      appVersion: () => '2.12.3',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -429,7 +461,95 @@ async function waitBulk(page, pred, timeout = 20000) {
   await ctx.close()
 }
 
-// ---------- 8. 强提醒：到点弹窗 + 系统通知 ----------
+// ---------- 8. 老布局升级：统计收高后不能留空行 ----------
+// 复现用户截图：2.12.2 收高后写回的 v2 存档里，统计在 y1、日历还在 y3，中间空一整行
+{
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+    colorScheme: dark ? 'dark' : 'light',
+  })
+  const page = await ctx.newPage()
+  const errors = []
+  page.on('pageerror', (e) => errors.push(String(e.message || e)))
+  page.on('console', (m) => {
+    if (m.type() === 'error' && !/Failed to load resource/i.test(m.text())) errors.push(m.text())
+  })
+  await page.addInitScript(() => {
+    window.Android = {
+      originPort: () => 47830,
+      appVersion: () => '2.12.3',
+      deviceName: () => 'test',
+      readClipboard: () => '',
+      writeClipboard: () => {},
+      vibrate: () => {},
+      toast: () => {},
+      openUrl: () => {},
+    }
+  })
+  await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(700)
+
+  await page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.open('todolink', 2)
+        req.onupgradeneeded = () => {
+          const d = req.result
+          if (!d.objectStoreNames.contains('records')) d.createObjectStore('records', { keyPath: 'id' })
+          if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', { keyPath: 'k' })
+        }
+        req.onsuccess = () => {
+          const db = req.result
+          const tx = db.transaction('meta', 'readwrite')
+          tx.objectStore('meta').put({
+            k: 'homeLayout',
+            v: {
+              v: 2,
+              rows: 8,
+              items: [
+                { id: 'quote', x: 0, y: 0, w: 4, h: 1 },
+                { id: 'stats', x: 0, y: 1, w: 4, h: 1 },
+                { id: 'calendar', x: 0, y: 3, w: 4, h: 3 },
+                { id: 'today', x: 0, y: 6, w: 2, h: 2 },
+                { id: 'holidays', x: 2, y: 6, w: 2, h: 2 },
+              ],
+            },
+          })
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+        }
+        req.onerror = () => reject(req.error)
+      })
+  )
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(800)
+
+  const after = await page.evaluate(() => {
+    const rowStart = (id) => {
+      const el = document.querySelector(`.hc[data-card="${id}"]`)
+      if (!el) return null
+      const m = /^(\d+)/.exec(el.style.gridRow || '')
+      return m ? Number(m[1]) - 1 : null
+    }
+    return { quote: rowStart('quote'), stats: rowStart('stats'), calendar: rowStart('calendar') }
+  })
+  check('升级后日历紧贴统计卡（不留空行）', after.calendar === 2, `stats y${after.stats} / calendar y${after.calendar}`)
+
+  const saved = await readLayout(page)
+  check('升级后的布局已回写为 v3', !!saved && saved.v === 3, saved ? 'v=' + saved.v : '未写入')
+  check(
+    '回写的坐标也已压实',
+    !!saved && (saved.items.find((i) => i.id === 'calendar') || {}).y === 2,
+    JSON.stringify(saved && saved.items.map((i) => `${i.id}:${i.y}`))
+  )
+  check('升级过程无脚本错误', errors.length === 0, errors.slice(0, 3).join(' | '))
+  await ctx.close()
+}
+
+// ---------- 9. 强提醒：到点弹窗 + 系统通知 ----------
 // 单独开一个上下文：写入一条「1 分钟前就该提醒」的待办，重载后由 initAlerts 的首次 sweep 触发
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
@@ -441,7 +561,7 @@ async function waitBulk(page, pred, timeout = 20000) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.2',
+      appVersion: () => '2.12.3',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
