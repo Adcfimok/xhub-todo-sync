@@ -4,6 +4,7 @@
   "orderSource": "version-asc",
   "actualOrder": [
     "xhub-ext-2.1.0",
+    "xhub-ext-2.2.0",
     "android-apk-2.7.0",
     "android-apk-2.8.0",
     "android-apk-2.9.0"
@@ -26,6 +27,24 @@
       "commit": "376694dd5fb3fa29c27b61f3701850bd1f3dbb92",
       "notes": "# 待办同步扩展 · x-hub v2.1.0\n\n把桌面工作台的待办 / 笔记 / 便签 / 速达 / 提示词同步到安卓手机，并为手机端提供扩展宿主与 AI 中转。\n\n## 本版内容\n\n- **分发包补入 `service/netinfo.js`**：上一版压缩包缺该文件，解压到扩展目录后 Node 后端会因找不到模块起不来；\n  本包解压到空目录实测 `/healthz` 与 `/api/v1/diag` 正常。\n- **网卡选路**：后端用 UDP `connect(223.5.5.5:53)` 取默认路由，按「默认路由 +1000 / 物理网卡 +100 / 虚拟网卡 −100」\n  排序候选地址，主地址优先给手机；页面在主地址旁标注「默认路由」，虚拟网卡会额外提示。\n- **二维码 v3**：载荷为 `xhub://3/<配对码>/<ip:port,...>`，最多带 4 个候选地址，手机逐个尝试，\n  解决「同一 Wi-Fi 却配对不上」里最常见的地址给错问题。\n- **五类数据同步**：`todos / notes / resources / snippets / stickies`；HLC + 记录级 LWW，墓碑保留 30 天。\n- **权限与诊断**：`data:read / data:write / network / notify`；页面直接显示读取与写回范围，\n  缺 `data:read` 时给红字提示与「打开扩展权限设置」按钮。\n\n## 安装\n\n1. 下载 `com.zhou.todo-relay-2.1.0.zip`，解压到任意目录（不要只解压一半，`service/` 必须完整）。\n2. x-hub → 扩展中心 → 我的扩展 → 添加扩展，指向解压后的目录（含 `manifest.json`）。\n3. 打开扩展页，确认主地址带「默认路由」标签；手机端扫码或手输地址 + 6 位配对码。\n\n## 环境要求\n\n- x-hub 桌面版 0.9.4+（常驻后台能力）\n- 扩展后端为 Node 18+，监听 `47821`\n- 电脑与手机同一局域网；明文 HTTP + Bearer 令牌准入\n\n## 已知限制\n\n- `data.*` 由电脑端「待办同步」页面代答，页面关闭时扩展会显示「电脑端页面未打开」。\n- 公共 Wi-Fi 下不建议开启：协议为局域网明文 HTTP，仅靠令牌准入。\n\n## 校验\n\n```bash\n# 解压后\nnode service/index.js            # 应打印监听 47821\ncurl http://127.0.0.1:47821/healthz   # {\"ok\":true}\ncurl http://127.0.0.1:47821/api/v1/diag\n```\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
       "releaseName": "待办同步扩展 · x-hub v2.1.0"
+    },
+    {
+      "id": "xhub-ext-2.2.0",
+      "version": "2.2.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-2.2.0.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 59106,
+      "sha256": "5d0eedbae8147697defac2b385d117891f09e36369ef5dad095124a2750a946e",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.0/com.zhou.todo-relay-2.2.0.zip",
+      "uploadedAt": "2026-11-07T09:20:02.263Z",
+      "tag": "xhub-ext-v2.2.0",
+      "commit": "3597ed39b21eb4e1ed3cc539c3c0e6f5278e720b",
+      "notes": "# 待办同步扩展 · x-hub v2.2.0\n\n左栏新增「安卓客户端」下载卡片，把手机端 APK 的 GitHub 下载入口放进扩展里，不用再翻仓库。\n\n## 本版内容\n\n- **新增安卓端下载卡片**：位于左栏「设备」面板下方，常驻显示，不折叠、不需要展开。\n  整行是一颗按钮，点击经宿主 `openExternal` 在应用内浏览器打开 APK 直链；\n  右侧「复制链接」把直链写进剪贴板，方便粘贴到手机浏览器或聊天窗口；「版本说明」跳 Release 页。\n- **补 `open-url` 权限**：manifest 的 `permissions` 增加 `open-url`。这一步不能省——\n  宿主扩展 iframe 的 sandbox 是 `allow-scripts allow-same-origin allow-downloads`，\n  没有 `allow-popups`，`target=\"_blank\"` 与 `window.open()` 会被静默拦截（点了没反应）。\n- **样式沿用现有卡片**：复用 `--well / --line / --accent` 变量与设备卡的 9px 圆角、1px 边框、\n  相同内边距，浅色/深色主题下都与相邻面板对齐（实测宽度差 ≤1px）。\n\n## 下载卡片的行为\n\n| 操作 | 结果 |\n| --- | --- |\n| 点击卡片主体 | 打开 `todo-link-2.9.0.apk` 直链（GitHub Releases） |\n| 点「复制链接」 | 复制 APK 直链，按钮短暂显示「已复制」 |\n| 点「版本说明」 | 打开该版本的 Release 页面 |\n\n卡片上的版本号与文件大小是页面内常量（`view/app.js` 的 `ANDROID_DL`），发新版时与\n`_tools/release-upload/versions.json` 的 `android-apk` 条目一起改。\n\n## 安装\n\n1. 下载 `com.zhou.todo-relay-2.2.0.zip`，解压到任意目录（`service/` 必须完整）。\n2. x-hub → 扩展中心 → 我的扩展 → 添加扩展，指向解压后的目录（含 `manifest.json`）。\n3. 打开扩展页，左栏底部应出现「安卓客户端」卡片；点击应唤起床载浏览器打开下载页。\n\n## 从 2.1.0 升级\n\n覆盖解压到原目录即可，`.data/` 里的配对记录与设备令牌不受影响（压缩包本身不含 `.data`）。\n新增的 `open-url` 权限首次调用时宿主可能要求确认，确认后生效。\n\n## 环境要求\n\n- x-hub 桌面版 0.9.4+（常驻后台能力、`openExternal` 桥）\n- 扩展后端为 Node 18+，监听 `47821`\n- 下载卡片需要能访问 GitHub\n\n## 已知限制\n\n- `data.*` 由电脑端「待办同步」页面代答，页面关闭时扩展会显示「电脑端页面未打开」。\n- 公共 Wi-Fi 下不建议开启：协议为局域网明文 HTTP，仅靠令牌准入。\n- 下载链接写死在页面里，不联网查询最新版本；发版后需同步更新常量。\n\n## 校验\n\n```bash\n# 解压后\nnode service/index.js                 # 应打印监听 47821\ncurl http://127.0.0.1:47821/healthz    # {\"ok\":true}\n```\n\n界面回归：`node _tools/extension-download-check.mjs --shots`\n（校验卡片位置、文案、跳转、复制、与相邻面板等宽，浅色/深色各跑一遍）。\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
+      "releaseName": "待办同步扩展 · x-hub v2.2.0"
     },
     {
       "id": "android-apk-2.7.0",
@@ -70,12 +89,12 @@
       "file": "android/todo-link-2.9.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 187105,
       "sha256": "ed6a90c5dd1316fc1423716b3397ee2cdb46d447168f1d3bcfbce3e0f4187112",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk",
-      "uploadedAt": "2026-11-06T02:00:42.276Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.9.0",
       "commit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
       "notes": "# 待办同步 · 安卓端 v2.9.0\n\n底部悬浮导航栏整体上移，落到单手拇指自然够得着的区域；横屏/矮屏自动收回贴边，避免挤占正文。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 13 |\n| versionName | 2.9.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n\n## 本版变更\n\n- **底部导航栏上移**：胶囊下沿到可用区底边的距离由固定 22px 改为 `clamp(44px, 7vh, 64px)`，屏幕越高抬得越多，落在拇指自然停留的下缘 1/8 区域。\n- **四个耦合数值收拢为 CSS 变量**：`--dock-h`（胶囊高度）、`--dock-lift`（下沿抬升量）、`--dock-clear`（内容呼吸区），列表留白、toast 提示条、AI 输入胶囊三处跟随，杜绝「抬了底栏、内容还被压住」。\n- **横屏/矮屏自适应**：`@media (max-height: 480px)` 下 lift 收到 10px、clear 收到 20px，避免横向场景挤掉正文。\n- **刘海屏/手势导航适配**：所有底部偏移叠加 `env(safe-area-inset-bottom)`，安全区与手势条天然避让。\n- **修复版本号未随构建生效**：此前 `AndroidManifest.xml` 硬编码 versionCode/versionName 覆盖了构建参数，本版清单与 `build.sh` 统一为 13 / 2.9.0。\n\n## 升级说明\n\n与 2.8.0 同一签名证书（SHA-256 `0be758eb…`），**可直接覆盖安装，本地数据与登录态保留**（数据保留机制见 `docs/06`）。\n\n## 安装\n\n1. 下载 `todo-link-2.9.0.apk`，允许「安装未知来源应用」。\n2. 打开「我的 → 同步与设置」→ 扫码（推荐）或手输主地址 + 6 位配对码。\n3. 配对成功后首页出现五类计数卡片。\n\n## 验收记录\n\n- 底栏几何校验：`_tools/navbar-check.mjs` 在 5 种视口（360×740 / 390×844 / 412×915 / 430×932 / 740×360）下全部通过，胶囊间距、列表留白、toast、AI 输入胶囊均无重叠、无遮挡。\n- 横屏滚动到底验证：末块内容与胶囊上沿留 30px 余量，可完整露出。\n- 版本号复检：`aapt dump badging` 返回 versionCode 13 / versionName 2.9.0，签名 SHA-256 与 2.8.0 一致。\n\n## 校验\n\n```bash\napksigner verify --print-certs todo-link-2.9.0.apk   # 证书应为 0be758eb…\naapt dump badging todo-link-2.9.0.apk | head -2      # versionCode 13 / 2.9.0\n```\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
@@ -83,10 +102,10 @@
     }
   ],
   "counts": {
-    "total": 4,
+    "total": 5,
     "success": 1,
     "failed": 0,
-    "skipped": 3,
+    "skipped": 4,
     "unprocessed": 0
   },
   "failure": null,
@@ -94,6 +113,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-06T02:00:38.092Z",
-  "finishedAt": "2026-11-06T02:00:42.276Z"
+  "startedAt": "2026-11-07T09:19:58.819Z",
+  "finishedAt": "2026-11-07T09:20:02.776Z"
 }
