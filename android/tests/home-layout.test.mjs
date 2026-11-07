@@ -1,12 +1,13 @@
 /**
- * 首页卡片布局回归：统计卡「拆四张 → 回退单张」后的几何与数据迁移。
+ * 首页卡片布局回归：统计卡与「每日一句」同为 4×1 的几何、以及老布局升级。
  *
  * 运行：
  *   node --experimental-default-type=module --test android/tests/home-layout.test.mjs
  *
- * 重点盯两件事：
- * 1) 统计仍是一张 4×2 卡片，四个数字在卡片内部，不再有 stat:* 独立卡
- * 2) 装过 2.12.0 的布局（四张 4×1 统计卡）读出来会合并回一张，日历等卡片顺延而不是丢掉
+ * 重点盯三件事：
+ * 1) 统计卡是一张 4×1 卡片，和「每日一句」占同样的格数
+ * 2) 装过 2.11.x/2.12.x 的 2 行统计卡，载入时会收成 1 行（用户自己拉到 3 行以上的不动）
+ * 3) 装过 2.12.0 的四张统计卡，载入时会合并回一张，日历等卡片顺延而不是丢掉
  */
 
 import test from 'node:test'
@@ -17,6 +18,8 @@ import {
   cardDef,
   defaultLayout,
   normalizeLayout,
+  loadLayout,
+  needsUpgrade,
   addCard,
   removeCard,
   placeCard,
@@ -40,23 +43,25 @@ function inGrid(items) {
   })
 }
 
-test('统计卡是单张 4×2，卡片目录里没有拆开的 stat:*', () => {
-  const def = cardDef('stats')
-  assert.ok(def, 'stats 应该在卡片目录里')
-  assert.equal(def.defW, 4)
-  assert.equal(def.defH, 2)
-  assert.equal(def.minH, 2)
-  assert.equal(def.route, undefined, '统计卡自己不跳转，靠四宫格里的按钮')
+test('统计卡与每日一句同为 4×1', () => {
+  const quote = cardDef('quote')
+  const stats = cardDef('stats')
+  assert.ok(stats, 'stats 应该在卡片目录里')
+  assert.deepEqual({ w: stats.defW, h: stats.defH }, { w: quote.defW, h: quote.defH })
+  assert.equal(stats.minH, 1, '统计卡最小高度也是 1 行，和名言一致')
+  assert.equal(stats.route, undefined, '统计卡自己不跳转，靠四宫格里的按钮')
   SPLIT_IDS.forEach((id) => assert.equal(cardDef(id), null, `${id} 不应再出现在目录里`))
 })
 
-test('默认布局：名言之后就是统计卡，日历接在下面', () => {
+test('默认布局：统计紧跟名言、同为 1 行，日历接在下面', () => {
   const layout = defaultLayout()
+  const quote = layout.items.find((i) => i.id === 'quote')
   const stats = layout.items.find((i) => i.id === 'stats')
-  assert.deepEqual({ x: stats.x, y: stats.y, w: stats.w, h: stats.h }, { x: 0, y: 1, w: 4, h: 2 })
+  assert.deepEqual({ x: stats.x, y: stats.y, w: stats.w, h: stats.h }, { x: 0, y: 1, w: 4, h: 1 })
+  assert.equal(quote.y + quote.h, stats.y, '统计紧贴名言下一行')
   const cal = layout.items.find((i) => i.id === 'calendar')
-  assert.equal(cal.y, 3)
-  assert.equal(layout.items.some((i) => SPLIT_IDS.includes(i.id)), false)
+  assert.equal(cal.y, 2)
+  assert.equal(layout.v, 2)
   noOverlap(layout.items)
   inGrid(layout.items)
 })
@@ -69,7 +74,36 @@ test('卡片目录共 10 项，卡片库与 2.11.1 一致', () => {
   )
 })
 
-test('2.12.0 的四张统计卡会合并回一张，后面的卡片顺延', () => {
+test('v1 布局里 2 行的统计卡，载入后收成 1 行并标记为 v2', () => {
+  const v1 = {
+    v: 1,
+    items: [
+      { id: 'quote', x: 0, y: 0, w: 4, h: 1 },
+      { id: 'stats', x: 0, y: 1, w: 4, h: 2 },
+      { id: 'calendar', x: 0, y: 3, w: 4, h: 3 },
+      { id: 'today', x: 0, y: 6, w: 2, h: 2 },
+      { id: 'holidays', x: 2, y: 6, w: 2, h: 2 },
+    ],
+  }
+  assert.equal(needsUpgrade(v1), true)
+  const out = loadLayout(v1)
+  const stats = out.items.find((i) => i.id === 'stats')
+  assert.deepEqual({ y: stats.y, h: stats.h }, { y: 1, h: 1 })
+  const cal = out.items.find((i) => i.id === 'calendar')
+  assert.ok(cal.y >= 2 && cal.y <= 3, '日历上移或保持原位，不与其他卡重叠')
+  assert.equal(out.v, 2)
+  assert.equal(needsUpgrade(out), false, '回写后不应再升级')
+  noOverlap(out.items)
+  inGrid(out.items)
+})
+
+test('用户自己拉到 3 行以上的统计卡不被强行改回 1 行', () => {
+  const v1 = { v: 1, items: [{ id: 'stats', x: 0, y: 1, w: 4, h: 4 }] }
+  const out = loadLayout(v1)
+  assert.equal(out.items.find((i) => i.id === 'stats').h, 4)
+})
+
+test('2.12.0 的四张统计卡会合并回一张 4×1，后面的卡片顺延', () => {
   const split = {
     v: 1,
     items: [
@@ -79,30 +113,25 @@ test('2.12.0 的四张统计卡会合并回一张，后面的卡片顺延', () =
       { id: 'stat:resources', x: 0, y: 3, w: 4, h: 1 },
       { id: 'stat:snippets', x: 0, y: 4, w: 4, h: 1 },
       { id: 'calendar', x: 0, y: 5, w: 4, h: 3 },
-      { id: 'today', x: 0, y: 8, w: 2, h: 2 },
-      { id: 'holidays', x: 2, y: 8, w: 2, h: 2 },
     ],
   }
-  const out = normalizeLayout(split)
+  const out = loadLayout(split)
   assert.equal(out.items.some((i) => SPLIT_IDS.includes(i.id)), false, '拆分卡不应残留')
   const stats = out.items.find((i) => i.id === 'stats')
   assert.ok(stats, '应合并出一张统计卡')
-  assert.deepEqual({ x: stats.x, y: stats.y, w: stats.w, h: stats.h }, { x: 0, y: 1, w: 4, h: 2 })
+  assert.deepEqual({ x: stats.x, y: stats.y, w: stats.w, h: stats.h }, { x: 0, y: 1, w: 4, h: 1 })
   const cal = out.items.find((i) => i.id === 'calendar')
-  assert.ok(cal && cal.y >= 3, '日历应被顺延到统计卡之后')
-  assert.equal(out.items.length, 5)
+  assert.ok(cal && cal.y >= 2, '日历应被顺延到统计卡之后')
   noOverlap(out.items)
   inGrid(out.items)
 })
 
-test('合并是幂等的：再存再读不会多卡', () => {
-  const once = normalizeLayout({ items: SPLIT_IDS.map((id, i) => ({ id, x: 0, y: 1 + i, w: 4, h: 1 })) })
-  const twice = normalizeLayout(once)
+test('合并与升级都是幂等的：再存再读不会多卡、不会反复缩高', () => {
+  const once = loadLayout({ v: 1, items: SPLIT_IDS.map((id, i) => ({ id, x: 0, y: 1 + i, w: 4, h: 1 })) })
+  const twice = loadLayout(once)
   assert.equal(once.items.length, 1)
-  assert.deepEqual(
-    twice.items.map((i) => i.id),
-    once.items.map((i) => i.id)
-  )
+  assert.equal(twice.items.length, 1)
+  assert.equal(twice.items[0].h, 1)
   noOverlap(twice.items)
 })
 
@@ -115,15 +144,15 @@ test('只装了一部分统计卡也能合并（用户删过其中几张）', ()
   })
   assert.equal(out.items.length, 2)
   const stats = out.items.find((i) => i.id === 'stats')
-  assert.deepEqual({ y: stats.y, w: stats.w, h: stats.h }, { y: 2, w: 4, h: 2 })
+  assert.deepEqual({ y: stats.y, w: stats.w, h: stats.h }, { y: 2, w: 4, h: 1 })
   noOverlap(out.items)
 })
 
-test('统计卡缩放受 minH 约束，拖完仍然合法', () => {
+test('统计卡高度下限是 1 行，拖到 0 也不行', () => {
   const layout = defaultLayout()
-  const moved = placeCard(layout, 'stats', { x: 0, y: 9, w: 4, h: 1 })
+  const moved = placeCard(layout, 'stats', { x: 0, y: 6, w: 4, h: 0 })
   const it = moved.items.find((i) => i.id === 'stats')
-  assert.equal(it.h, 2, '统计卡不能压到 1 行')
+  assert.equal(it.h, 1)
   noOverlap(moved.items)
   inGrid(moved.items)
 })
@@ -135,8 +164,7 @@ test('移除再添加统计卡能回到网格里', () => {
   const added = addCard(removed, 'stats')
   const it = added.items.find((i) => i.id === 'stats')
   assert.ok(it, '应能加回来')
-  assert.equal(it.w, 4)
-  assert.equal(it.h, 2)
+  assert.deepEqual({ w: it.w, h: it.h }, { w: 4, h: 1 })
   noOverlap(added.items)
   inGrid(added.items)
 })

@@ -15,6 +15,7 @@ import {
   addCard,
   removeCard,
   missingCards,
+  needsUpgrade,
   EXT_COLLECTIONS,
 } from '../lib/homeLayout.js'
 import { holidaysInRange, daysFromToday, fmtYmd } from '../lib/holidays.js'
@@ -30,7 +31,10 @@ let drag = null
 
 export function mount(root) {
   rootEl = root
-  layout = loadLayout(S.meta.homeLayout)
+  const raw = S.meta.homeLayout
+  layout = loadLayout(raw)
+  // 老布局（统计 2 行）升级后结构变了，直接回写，别每次进首页都再算一遍
+  if (raw && needsUpgrade(raw)) saveMeta('homeLayout', layout)
   render()
   off = onChange(render)
   startClock()
@@ -153,6 +157,7 @@ function gridNode() {
           ? h('button', { class: 'hc-drag', type: 'button', text: '⋮⋮', 'aria-label': '拖动' })
           : null,
         h('span', { class: 'hc-title', text: def.title }),
+        item.id === 'stats' && !editing ? h('span', { class: 'hc-meta', text: statsMeta() }) : null,
         def.route && !editing
           ? h('button', { class: 'mini hc-more', type: 'button', text: '全部', onclick: () => go(def.route) })
           : null,
@@ -427,25 +432,23 @@ function editQuote() {
 }
 
 function cardStats() {
-  const notes = colRecords('notes').filter((x) => !x.deleted)
-  const res = colRecords('resources').filter((x) => !x.deleted)
-  const snips = colRecords('snippets').filter((x) => !x.deleted)
-  const open = colRecords('todos').filter((t) => !t.deleted && !t.done)
-  // 今天完成的数量：给统计卡一点「活着」的信息，也把 2 行高度填满
-  const todayDone = colRecords('todos').filter((t) => !t.deleted && t.done && t.completedAt && dayDiff(t.completedAt) === 0).length
-  const pending = S.records.filter((r) => r.dirty).length
+  const open = colRecords('todos').filter((t) => !t.done)
+  // 四个数字一行排开：卡片高度只有 1 行（78px），靠紧凑排版保证四个都不被裁
   return h('div', { class: 'hc-stats' }, [
     h('div', { class: 'stat-grid' }, [
       stat('待办', open.length, 'todos'),
-      stat('笔记', notes.length, 'notes'),
-      stat('速达', res.length, 'resources'),
-      stat('提示词', snips.length, 'snippets'),
+      stat('笔记', colRecords('notes').length, 'notes'),
+      stat('速达', colRecords('resources').length, 'resources'),
+      stat('提示词', colRecords('snippets').length, 'snippets'),
     ]),
-    h('div', {
-      class: 'hc-hint',
-      text: '今天完成 ' + todayDone + ' 件' + (pending ? ' · ' + pending + ' 条待同步' : ' · 已全部同步'),
-    }),
   ])
+}
+
+/** 统计卡的补充信息：1 行高塞不下脚注，挪到卡片头右侧的小字里 */
+function statsMeta() {
+  const done = colRecords('todos').filter((t) => t.done && t.completedAt && dayDiff(t.completedAt) === 0).length
+  const pending = S.records.filter((r) => r.dirty).length
+  return '今天完成 ' + done + ' 件' + (pending ? ' · ' + pending + ' 待同步' : '')
 }
 
 function cardToday() {

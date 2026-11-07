@@ -1717,20 +1717,28 @@ select.input { appearance: none; }
 .hd-date { width: 56px; }
 .hd-date b { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-/* 统计卡在 2 行高度里的排布（卡片内比整页更紧凑） */
-.hc-body .stat-grid { padding: 0; gap: 8px; }
-.hc-body .stat { padding: 6px 4px; border-radius: 10px; }
-.hc-body .stat b { font-size: 19px; line-height: 1.1; }
-.hc-body .stat span { font-size: 11px; margin-top: 1px; }
-
-/* 统计卡底部的补充信息 */
-.hc-hint { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); }
+/* 统计卡：与「每日一句」同为 4×1，四个格子横排在一行里，靠紧凑内边距保证不裁字 */
+.hc[data-card='stats'] .hc-body { padding: 2px 10px 5px; }
+.hc-stats { display: flex; height: 100%; }
+.hc-stats .stat-grid { flex: 1; gap: 8px; margin: 0; padding: 0; }
+.hc-stats .stat {
+  min-width: 0;
+  padding: 4px 4px;
+  border-radius: 10px;
+  justify-content: center;
+}
+.hc-stats .stat b { font-size: 18px; line-height: 1.05; }
+.hc-stats .stat span {
+  max-width: 100%;
+  margin-top: 1px;
+  font-size: 10.5px;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hc-meta { flex: none; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 /* 日历卡：把富余高度分给日期格，避免底部空一大块 */
 .hc-body .cal-card { display: flex; flex-direction: column; height: 100%; }
 .hc-body .cal-cells { flex: 1; grid-auto-rows: 1fr; }
-
-/* 统计卡：让四个格子吃掉多余高度，不把空白留在底部 */
-.hc-stats { display: flex; flex-direction: column; height: 100%; }
-.hc-stats .stat-grid { flex: 1; grid-auto-rows: 1fr; }
-.hc-stats .stat { justify-content: center; }

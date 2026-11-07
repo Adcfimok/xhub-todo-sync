@@ -9,11 +9,13 @@
 
 export const GRID_COLS = 4
 export const ROW_H = 78
+/** 布局结构版本：v2 起统计卡与「每日一句」同为 4×1，v1 时代统计是 4×2 */
+export const LAYOUT_V = 2
 
 /** 卡片目录：minW/minH 是内容能完整显示的下限 */
 export const CARD_DEFS = [
   { id: 'quote', title: '每日一句', desc: '本地名言，点一下换一条', minW: 2, minH: 1, defW: 4, defH: 1 },
-  { id: 'stats', title: '统计', desc: '待办/笔记/速达/提示词计数', minW: 3, minH: 2, defW: 4, defH: 2 },
+  { id: 'stats', title: '统计', desc: '待办/笔记/速达/提示词计数', minW: 3, minH: 1, defW: 4, defH: 1 },
   { id: 'calendar', title: '日历', desc: '本月月历与当日安排', minW: 3, minH: 3, defW: 4, defH: 3 },
   { id: 'today', title: '今天的待办', desc: '到期与最近几条', minW: 2, minH: 2, defW: 4, defH: 2, route: 'todos' },
   { id: 'todos', title: '待办清单', desc: '来自扩展的 todos 集合', minW: 2, minH: 2, defW: 4, defH: 2, route: 'todos' },
@@ -39,16 +41,17 @@ export function defaultLayout() {
   const items = []
   const place = (id, x, row, w, h) => items.push({ id, x, y: row, w, h })
   place('quote', 0, 0, 4, 1)
-  place('stats', 0, 1, 4, 2)
-  place('calendar', 0, 3, 4, 3)
-  place('today', 0, 6, 2, 2)
-  place('holidays', 2, 6, 2, 2)
-  place('notes', 0, 8, 2, 2)
-  place('resources', 2, 8, 2, 2)
-  return { v: 1, items, rows: 10 }
+  // 统计紧跟名言，同为 4×1：两张卡在首页上沿对齐、宽高一致
+  place('stats', 0, 1, 4, 1)
+  place('calendar', 0, 2, 4, 3)
+  place('today', 0, 5, 2, 2)
+  place('holidays', 2, 5, 2, 2)
+  place('notes', 0, 7, 2, 2)
+  place('resources', 2, 7, 2, 2)
+  return { v: LAYOUT_V, items, rows: 9 }
 }
 
-/** 2.12.0 短暂把统计拆成四张 4×1 卡片，2.12.1 起回退成一张 4×2 */
+/** 2.12.0 短暂把统计拆成四张 4×1 卡片，2.12.1 起回退成一张「统计」卡 */
 const SPLIT_STATS = ['stat:todos', 'stat:notes', 'stat:resources', 'stat:snippets']
 
 /**
@@ -73,8 +76,21 @@ function collapseStats(items) {
     rest.push(it)
   })
   if (at < 0) return items
-  rest.splice(at, 0, { id: 'stats', x: Math.min(x, GRID_COLS - 4), y, w: 4, h: 2 })
+  rest.splice(at, 0, { id: 'stats', x: Math.min(x, GRID_COLS - 4), y, w: 4, h: 1 })
   return rest
+}
+
+/**
+ * 老布局升级：v1 时代（2.11.x / 2.12.x）统计卡默认 2 行，
+ * 2.12.2 起统一成 1 行与名言对齐，这里把「正好 2 行」的统计卡收成 1 行。
+ * 只认 2 行：用户自己拉到 3 行以上的不动。
+ */
+function upgradeLayout(raw) {
+  if (!raw || !Array.isArray(raw.items) || Number(raw.v) >= LAYOUT_V) return raw
+  const items = raw.items.map((it) =>
+    it && it.id === 'stats' && Number(it.h) === 2 ? Object.assign({}, it, { h: 1 }) : it
+  )
+  return { v: LAYOUT_V, items }
 }
 
 function clampInt(v, lo, hi, fb) {
@@ -137,13 +153,18 @@ export function normalizeLayout(raw) {
   })
   // 缺的卡片默认不打进布局（等于被用户移除过），但首次使用（无 raw）给默认布局
   const rows = Math.max.apply(null, items.map((i) => i.y + i.h).concat([1]))
-  return { v: 1, items, rows }
+  return { v: LAYOUT_V, items, rows }
 }
 
-/** 载入：没有存过就用默认布局 */
+/** 载入：没有存过就用默认布局；老版本布局先升级到当前结构再规整 */
 export function loadLayout(raw) {
   if (!raw || !Array.isArray(raw.items)) return defaultLayout()
-  return normalizeLayout(raw)
+  return normalizeLayout(upgradeLayout(raw))
+}
+
+/** 这份存档是不是还没升级到当前结构（用于载入后顺手回写） */
+export function needsUpgrade(raw) {
+  return !raw || !Array.isArray(raw.items) || Number(raw.v) < LAYOUT_V
 }
 
 /**

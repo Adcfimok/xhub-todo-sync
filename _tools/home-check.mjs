@@ -113,7 +113,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.1',
+      appVersion: () => '2.12.2',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -142,18 +142,50 @@ for (const v of VIEWPORTS) {
     cards.join(',')
   )
 
-  // 统计卡回到单张 4×2：四个数字仍在一个卡片里，且不能再出现拆开的 stat:* 卡
+  // 统计卡与「每日一句」必须同宽同高，且四个数字一个都不能被裁掉
   const statsGeo = await page.evaluate(() => {
     const card = document.querySelector('.hc[data-card="stats"]')
-    if (!card) return null
-    const cells = [...card.querySelectorAll('.stat')]
-    const r = card.getBoundingClientRect()
-    return { w: Math.round(r.width), h: Math.round(r.height), cells: cells.length, split: document.querySelectorAll('[data-card^="stat:"]').length }
+    const quote = document.querySelector('.hc[data-card="quote"]')
+    if (!card || !quote) return null
+    const a = card.getBoundingClientRect()
+    const b = quote.getBoundingClientRect()
+    const cells = [...card.querySelectorAll('.stat')].map((el) => {
+      const r = el.getBoundingClientRect()
+      const bEl = el.querySelector('b')
+      const sEl = el.querySelector('span')
+      const bb = bEl.getBoundingClientRect()
+      const sb = sEl.getBoundingClientRect()
+      return {
+        label: (sEl.textContent || '').trim(),
+        // 文字框必须完整落在格子内，且格子不能出现滚动溢出
+        inside: bb.top >= r.top - 0.5 && sb.bottom <= r.bottom + 0.5 && bb.left >= r.left - 0.5 && sb.right <= r.right + 0.5,
+        clipped: el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1,
+      }
+    })
+    const body = card.querySelector('.hc-body')
+    return {
+      w: Math.round(a.width * 10) / 10,
+      h: Math.round(a.height * 10) / 10,
+      qw: Math.round(b.width * 10) / 10,
+      qh: Math.round(b.height * 10) / 10,
+      cells,
+      bodyOverflow: body ? body.scrollHeight > body.clientHeight + 1 : true,
+      split: document.querySelectorAll('[data-card^="stat:"]').length,
+    }
   })
   check(
-    `${v.name} 统计卡为单张四宫格`,
-    !!statsGeo && statsGeo.cells === 4 && statsGeo.split === 0 && statsGeo.h > statsGeo.w / 4,
-    statsGeo ? `${statsGeo.w}×${statsGeo.h}，${statsGeo.cells} 格，拆分卡 ${statsGeo.split}` : '未找到统计卡'
+    `${v.name} 统计卡与每日一句同宽同高`,
+    !!statsGeo && Math.abs(statsGeo.w - statsGeo.qw) < 1 && Math.abs(statsGeo.h - statsGeo.qh) < 1,
+    statsGeo ? `统计 ${statsGeo.w}×${statsGeo.h} / 名言 ${statsGeo.qw}×${statsGeo.qh}` : '未找到卡片'
+  )
+  check(
+    `${v.name} 四个统计格完整不裁切`,
+    !!statsGeo &&
+      statsGeo.cells.length === 4 &&
+      statsGeo.split === 0 &&
+      !statsGeo.bodyOverflow &&
+      statsGeo.cells.every((c) => c.inside && !c.clipped),
+    statsGeo ? statsGeo.cells.map((c) => `${c.label}:${c.inside && !c.clipped ? 'ok' : 'FAIL'}`).join(' ') : '未找到格子'
   )
 
   // 时间与问好必须落在同一行：水平相邻 + 垂直重叠
@@ -220,7 +252,7 @@ for (const v of VIEWPORTS) {
 
   const moved = await readLayout(page)
   const item = moved && moved.items.filter((i) => i.id === dragCard)[0]
-  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 10, JSON.stringify(item))
+  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 9, JSON.stringify(item))
 
   // ---------- 4. 缩放 ----------
   // 笔记卡 2 宽、最小 2：向右拖一格加到 3 宽（位置可能被顺延，宽度必须变）
@@ -351,7 +383,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.1',
+      appVersion: () => '2.12.2',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -409,7 +441,7 @@ async function waitBulk(page, pred, timeout = 20000) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.1',
+      appVersion: () => '2.12.2',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
