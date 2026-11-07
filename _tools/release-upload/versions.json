@@ -64,6 +64,12 @@
       "version": "2.2.2",
       "kind": "xhub-extension",
       "file": "dist/com.zhou.todo-relay-2.2.2.zip"
+    },
+    {
+      "id": "android-apk-2.9.2",
+      "version": "2.9.2",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.9.2.apk"
     }
   ]
 }
