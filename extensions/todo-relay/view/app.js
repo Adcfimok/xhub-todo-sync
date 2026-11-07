@@ -32,10 +32,10 @@
   // android-apk 条目保持一致）。宿主 iframe 没有 allow-popups，target="_blank"
   // 与 window.open() 都会被静默拦截，所以跳转一律走 api.openExternal。
   var ANDROID_DL = {
-    version: '2.9.0',
-    size: 187105,
-    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk',
-    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.9.0',
+    version: '3.0.0',
+    size: 245092,
+    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.0.0/todo-link-3.0.0.apk',
+    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.0.0',
   }
 
   // ---------------------------------------------------------------- 基础
@@ -686,6 +686,13 @@
       row.appendChild(meta)
       row.appendChild(st)
       if (!d.revoked) {
+        var fbtn = document.createElement('button')
+        fbtn.className = 'revoke fileflag' + (d.allowFiles === false ? ' off' : ' on')
+        fbtn.type = 'button'
+        fbtn.textContent = d.allowFiles === false ? '文件 关' : '文件 开'
+        fbtn.title = d.allowFiles === false ? '这台设备不能收发文件，点击开启' : '允许这台设备收发文件，点击关闭'
+        fbtn.addEventListener('click', function () { toggleFiles(d) })
+        row.appendChild(fbtn)
         var btn = document.createElement('button')
         btn.className = 'revoke'
         btn.type = 'button'
@@ -695,6 +702,16 @@
       }
       ul.appendChild(row)
     })
+  }
+
+  function toggleFiles(d) {
+    svc('/api/local/files/allow', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId: d.id, allow: d.allowFiles === false }),
+    })
+      .then(function () { return poll() })
+      .then(function () { return refreshFiles() })
+      .catch(handleErr)
   }
 
   function renderStats(a) {
@@ -920,6 +937,374 @@
     return S.polling
   }
 
+  // ---------------------------------------------------------------- 文件传输
+
+  var FILES = { data: null, sending: [], at: 0, loading: false }
+  var MAX_FILE = 512 * 1024 * 1024
+
+  function fmtSize(n) {
+    n = Number(n) || 0
+    if (n < 1024) return n + ' B'
+    if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB'
+    if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB'
+    return (n / 1073741824).toFixed(2) + ' GB'
+  }
+
+  function iconOf(kind) {
+    return { image: '▣', video: '▶', audio: '♪', doc: '▤', archive: '▦', code: '⌘' }[kind] || '◇'
+  }
+
+  // 扩展页面跑在宿主 iframe 里，直连 127.0.0.1 会被跨源拦掉；
+  // 统一走宿主提供的 service.request（它转发到本服务的 /api/local/*）。
+  var HOST = api && api.service && typeof api.service.request === 'function' ? api.service : null
+
+  function fileApi(path, opts) {
+    opts = opts || {}
+    var init = { method: opts.method || 'GET', headers: {} }
+    if (opts.body !== undefined) {
+      init.headers['Content-Type'] = 'application/json'
+      init.body = opts.body
+    }
+    var call = HOST ? HOST.request(path, init) : fetch(path, init)
+    var timeout = new Promise(function (_, reject) {
+      setTimeout(function () {
+        var e = new Error('请求超时')
+        e.status = 0
+        reject(e)
+      }, opts.timeout || 30000)
+    })
+    return Promise.race([call, timeout]).then(function (r) {
+      if (r.status >= 200 && r.status < 300) return r.json()
+      return r
+        .json()
+        .catch(function () { return {} })
+        .then(function (d) {
+          var e = new Error((d && (d.message || d.code)) || 'HTTP ' + r.status)
+          e.code = d && d.code
+          e.status = r.status
+          throw e
+        })
+    })
+  }
+
+  function refreshFiles() {
+    if (FILES.loading) return Promise.resolve()
+    FILES.loading = true
+    return fileApi('/api/local/files/state')
+      .then(function (d) {
+        FILES.data = d
+        FILES.at = Date.now()
+        renderFiles()
+      })
+      .catch(function (e) {
+        // 服务刚起来时 404 很常见，不做打扰；页面底部仍能看到同步状态
+        if (e.status !== 404) S.lastError = e.message
+      })
+      .finally(function () { FILES.loading = false })
+  }
+
+  function renderFiles() {
+    var d = FILES.data
+    if (!d) return
+    var st = d.stats || {}
+    $('files-quota').textContent = fmtSize(st.used) + ' / ' + fmtSize(st.quota) + ' · 单文件上限 ' + fmtSize(d.maxFile || MAX_FILE)
+
+    var out = $('file-out')
+    out.innerHTML = ''
+    var outs = d.out || []
+    $('out-count').textContent = String(outs.filter(function (x) { return x.state === 'pending' }).length)
+    $('file-out-empty').hidden = outs.length > 0
+    outs.slice(0, 20).forEach(function (it) { out.appendChild(fileRow(it, 'out')) })
+
+    var inbox = $('file-in')
+    inbox.innerHTML = ''
+    var ins = d.inbox || []
+    $('in-count').textContent = String(ins.length)
+    $('file-in-empty').hidden = ins.length > 0
+    ins.slice(0, 30).forEach(function (it) { inbox.appendChild(fileRow(it, 'in')) })
+  }
+
+  function outStateText(it) {
+    if (it.state === 'delivered') return '已送达 ' + fmtTime(it.deliveredAt)
+    if (it.state === 'declined') return '手机已拒收'
+    if (it.state === 'expired' || it.expired) return '已过期（24 小时）'
+    if (it.state === 'sending') return '正在读取…'
+    return '等待手机接收'
+  }
+
+  function fileRow(it, kind) {
+    var li = document.createElement('li')
+    li.className = 'file'
+    var ic = document.createElement('span')
+    ic.className = 'fic'
+    ic.textContent = iconOf(it.kind)
+    var meta = document.createElement('div')
+    meta.className = 'fmeta'
+    var nm = document.createElement('div')
+    nm.className = 'fname'
+    nm.textContent = it.name
+    nm.title = it.path || it.name
+    var sub = document.createElement('div')
+    sub.className = 'fsub'
+    var bits = [fmtSize(it.size)]
+    if (kind === 'in') {
+      bits.push('来自 ' + (it.from || '手机'))
+      bits.push(fmtTime(it.at))
+    } else {
+      bits.push(outStateText(it))
+    }
+    sub.textContent = bits.join(' · ')
+    meta.appendChild(nm)
+    meta.appendChild(sub)
+    li.appendChild(ic)
+    li.appendChild(meta)
+    if (it.risk === 'high') {
+      var risk = document.createElement('span')
+      risk.className = 'frisk'
+      risk.textContent = '可执行'
+      risk.title = '可执行/脚本类文件：确认来源再打开'
+      li.appendChild(risk)
+    }
+    if (kind === 'in') {
+      var cp = document.createElement('button')
+      cp.className = 'revoke ghost'
+      cp.type = 'button'
+      cp.textContent = '复制路径'
+      cp.addEventListener('click', function () { copyText(it.path || '') })
+      li.appendChild(cp)
+    }
+    var del = document.createElement('button')
+    del.className = 'revoke'
+    del.type = 'button'
+    del.textContent = '删除'
+    del.addEventListener('click', function () { removeFile(it.id) })
+    li.appendChild(del)
+    return li
+  }
+
+  function copyText(text) {
+    if (!text) return
+    var done = function () { flash('已复制：' + text) }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done) })
+    } else {
+      fallbackCopy(text, done)
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try { document.execCommand('copy') } catch (e) {}
+    document.body.removeChild(ta)
+    done()
+  }
+
+  function flash(msg) {
+    var el = $('bar-left')
+    if (!el) return
+    var old = el.textContent
+    el.textContent = msg
+    setTimeout(function () { if (el.textContent === msg) el.textContent = old }, 4000)
+  }
+
+  function removeFile(id) {
+    fileApi('/api/local/files/remove', { method: 'POST', json: true, body: JSON.stringify({ id: id }) })
+      .then(function () { return refreshFiles() })
+      .catch(handleErr)
+  }
+
+  function clearFiles(scope) {
+    fileApi('/api/local/files/clear', { method: 'POST', json: true, body: JSON.stringify({ scope: scope }) })
+      .then(function (r) { flash('已清理 ' + r.removed + ' 个文件'); return refreshFiles() })
+      .catch(handleErr)
+  }
+
+  function renderProgress() {
+    var box = $('file-progress')
+    box.innerHTML = ''
+    FILES.sending.forEach(function (t) {
+      var row = document.createElement('div')
+      row.className = 'up' + (t.error ? ' bad' : '')
+      var head = document.createElement('div')
+      head.className = 'up-head'
+      var nm = document.createElement('span')
+      nm.className = 'up-name'
+      nm.textContent = t.name
+      var pct = document.createElement('span')
+      pct.className = 'up-pct'
+      pct.textContent = t.error ? '失败' : Math.round(t.pct * 100) + '%'
+      head.appendChild(nm)
+      head.appendChild(pct)
+      var track = document.createElement('div')
+      track.className = 'up-track'
+      var bar = document.createElement('i')
+      bar.style.width = Math.max(2, Math.round(t.pct * 100)) + '%'
+      track.appendChild(bar)
+      row.appendChild(head)
+      row.appendChild(track)
+      if (t.error) {
+        var err = document.createElement('div')
+        err.className = 'up-err'
+        err.textContent = t.error
+        row.appendChild(err)
+      }
+      box.appendChild(row)
+    })
+  }
+
+  /** 宿主桥只收字符串：把 1MiB 转成 base64（分片拼接，避免 apply 参数上限） */
+  function toB64(buf) {
+    var bytes = new Uint8Array(buf)
+    var s = ''
+    var step = 0x8000
+    for (var i = 0; i < bytes.length; i += step) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + step))
+    }
+    return btoa(s)
+  }
+
+  var LOCAL_CHUNK = 1024 * 1024
+
+  function postChunk(id, off, buf, attempt) {
+    var init = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ off: off, data: toB64(buf) }),
+    }
+    var url = '/api/local/files/send/chunk?id=' + encodeURIComponent(id)
+    return (HOST ? HOST.request(url, init) : fetch(url, init)).then(
+      function (r) {
+        if (r.ok) return r.json()
+        return r
+          .json()
+          .catch(function () { return {} })
+          .then(function (d) {
+            var retryable = r.status >= 500 || r.status === 429
+            if (retryable && attempt < 3) {
+              return new Promise(function (res) { setTimeout(res, 300 * Math.pow(2, attempt)) }).then(function () {
+                return postChunk(id, off, buf, attempt + 1)
+              })
+            }
+            var e = new Error((d && (d.message || d.code)) || 'HTTP ' + r.status)
+            e.code = d && d.code
+            throw e
+          })
+      },
+      function (err) {
+        if (attempt < 3) {
+          return new Promise(function (res) { setTimeout(res, 300 * Math.pow(2, attempt)) }).then(function () {
+            return postChunk(id, off, buf, attempt + 1)
+          })
+        }
+        throw err
+      }
+    )
+  }
+
+  function uploadOne(file, onProgress) {
+    if (file.size > MAX_FILE) return Promise.reject(new Error('文件超过 512MB 上限'))
+    if (!file.size) return Promise.reject(new Error('空文件不能发送'))
+    return fileApi('/api/local/files/send/init', {
+      method: 'POST',
+      json: true,
+      body: JSON.stringify({ name: file.name, size: file.size, mime: file.type || '' }),
+    }).then(function (init) {
+      var off = 0
+      var sentChunks = 0
+      var totalChunks = Math.ceil(file.size / LOCAL_CHUNK)
+      function next() {
+        if (off >= file.size) {
+          return fileApi('/api/local/files/send/finish', {
+            method: 'POST',
+            json: true,
+            body: JSON.stringify({ id: init.id }),
+          })
+        }
+        var end = Math.min(off + LOCAL_CHUNK, file.size)
+        var at = off
+        return file
+          .slice(at, end)
+          .arrayBuffer()
+          .then(function (buf) { return postChunk(init.id, at, buf, 0) })
+          .then(function () {
+            off = end
+            sentChunks++
+            onProgress(sentChunks / totalChunks)
+            return next()
+          })
+      }
+      return next()
+    })
+  }
+
+  var sendChain = Promise.resolve()
+
+  function enqueueFiles(list) {
+    Array.prototype.slice.call(list || []).forEach(function (f) {
+      var t = { name: f.name, size: f.size, pct: 0, error: '' }
+      FILES.sending.push(t)
+      renderProgress()
+      sendChain = sendChain
+        .then(function () {
+          return uploadOne(f, function (p) {
+            t.pct = p
+            renderProgress()
+          })
+        })
+        .then(function () {
+          t.pct = 1
+          renderProgress()
+          refreshFiles()
+          setTimeout(function () {
+            var at = FILES.sending.indexOf(t)
+            if (at >= 0) FILES.sending.splice(at, 1)
+            renderProgress()
+          }, 2600)
+        })
+        .catch(function (e) {
+          t.error = (e && e.message) || '发送失败'
+          t.pct = 0
+          renderProgress()
+        })
+    })
+  }
+
+  function bindFiles() {
+    $('btn-pick-file').addEventListener('click', function () { $('file-input').click() })
+    $('file-input').addEventListener('change', function (e) {
+      enqueueFiles(e.target.files)
+      e.target.value = ''
+    })
+    var drop = $('file-drop')
+    ;['dragenter', 'dragover'].forEach(function (ev) {
+      drop.addEventListener(ev, function (e) {
+        e.preventDefault()
+        drop.classList.add('over')
+      })
+    })
+    ;['dragleave', 'drop'].forEach(function (ev) {
+      drop.addEventListener(ev, function (e) {
+        e.preventDefault()
+        drop.classList.remove('over')
+      })
+    })
+    drop.addEventListener('drop', function (e) {
+      if (e.dataTransfer && e.dataTransfer.files) enqueueFiles(e.dataTransfer.files)
+    })
+    $('btn-files-clear-in').addEventListener('click', function () { clearFiles('in') })
+    $('btn-files-clear-out').addEventListener('click', function () { clearFiles('out') })
+    refreshFiles()
+    setInterval(function () {
+      if (Date.now() - FILES.at < 12000) return
+      refreshFiles()
+    }, 6000)
+  }
+
   // ---------------------------------------------------------------- 实时推送
 
   var stream = null
@@ -947,6 +1332,16 @@
       poll()
     })
     stream.addEventListener('peer', function () { poll() })
+    // 文件事件只刷新文件面板，不触发整页同步
+    stream.addEventListener('file', function (e) {
+      refreshFiles()
+      if (e && e.data) {
+        try {
+          var p = JSON.parse(e.data)
+          if (p.kind === 'received') flash('收到手机文件：' + p.name)
+        } catch (err) {}
+      }
+    })
     stream.onerror = function () {
       streamFails += 1
       S.streamOk = false
@@ -1004,6 +1399,7 @@
   })
 
   bind()
+  bindFiles()
   bindPermButton()
   bindDownload()
   connectStream()

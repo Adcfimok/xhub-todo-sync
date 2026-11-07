@@ -1,0 +1,74 @@
+{
+  "id": "com.zhou.todo-relay",
+  "name": "待办同步",
+  "version": "3.0.0",
+  "runtime": "service",
+  "kind": "view",
+  "surfaces": [
+    "module",
+    "view"
+  ],
+  "openIn": [
+    "view"
+  ],
+  "entry": {
+    "module": "./module/index.html",
+    "view": "./view/index.html"
+  },
+  "moduleVariants": [
+    {
+      "id": "compact",
+      "name": "紧凑",
+      "minW": 2,
+      "minH": 2,
+      "idealW": 2,
+      "idealH": 2
+    },
+    {
+      "id": "standard",
+      "name": "标准",
+      "minW": 3,
+      "minH": 2,
+      "idealW": 4,
+      "idealH": 3
+    }
+  ],
+  "moduleOptions": {
+    "defaultHideTitle": false
+  },
+  "permissions": [
+    "data:read",
+    "data:write",
+    "network",
+    "notify",
+    "open-url"
+  ],
+  "requires": [
+    "data.todos.list",
+    "data.notes.list",
+    "data.resources.list",
+    "data.snippets.list",
+    "data.stickies.list"
+  ],
+  "backend": {
+    "entry": "./service/index.js",
+    "engine": {
+      "type": "node",
+      "minVersion": "18"
+    },
+    "cwd": "./service",
+    "port": 47821,
+    "host": "0.0.0.0",
+    "health": "/healthz"
+  },
+  "icon": "./icon.svg",
+  "description": "把工作台的待办 / 笔记 / 便签 / 速达 / 提示词同步到安卓手机：局域网直连、离线可改、恢复自动合并；同时给手机端提供扩展宿主与 AI 中转",
+  "author": "凉风有魈",
+  "config": {
+    "syncIntervalMs": 15000,
+    "tombstoneDays": 30,
+    "notifyOnConflict": true,
+    "autoIngest": true
+  },
+  "category": "实用工具"
+}

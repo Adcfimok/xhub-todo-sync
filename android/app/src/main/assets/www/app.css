@@ -1758,3 +1758,37 @@ select.input { appearance: none; }
 /* 日历卡：把富余高度分给日期格，避免底部空一大块 */
 .hc-body .cal-card { display: flex; flex-direction: column; height: 100%; }
 .hc-body .cal-cells { flex: 1; grid-auto-rows: 1fr; }
+
+/* ---------- 文件传输 ---------- */
+.xfer-list { display: flex; flex-direction: column; }
+.xfer { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.xfer:last-child { border-bottom: none; }
+.xfer.bad .xfer-s { color: var(--red); }
+.xfer-top { display: flex; align-items: center; gap: 10px; }
+.xfer-ic {
+  flex: none;
+  width: 30px; height: 30px;
+  border-radius: 9px;
+  display: grid; place-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 13px;
+}
+.xfer-meta { flex: 1; min-width: 0; }
+.xfer-n { font-size: 13.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xfer-s {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.xfer-btns { display: flex; gap: 8px; margin-top: 8px; padding-left: 40px; }
+.xfer-btns .mini { flex: 1; height: 32px; }
+.mini.on { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+.xfer-bar { height: 5px; margin: 9px 0 2px 40px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.xfer-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .18s ease; }
+.xfer-bar.done i { background: var(--green); }

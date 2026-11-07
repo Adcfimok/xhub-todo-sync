@@ -14,7 +14,34 @@ function bridgeFn(name) {
 // ---------------------------------------------------------------- 出站 HTTP
 
 const PENDING = new Map()
+// 原生异步事件（文件选择、传输进度）走独立订阅表：
+// 页面按需订阅，原生只认一个入口 __nativeEmit，不再拼 JS 源码。
+const NATIVE = { pick: new Set(), transfer: new Set() }
 let seq = 0
+
+export function onNative(kind, fn) {
+  const box = NATIVE[kind]
+  if (!box) return () => {}
+  box.add(fn)
+  return () => box.delete(fn)
+}
+
+export function emitNative(kind, payload) {
+  const box = NATIVE[kind]
+  if (!box) return
+  box.forEach((fn) => {
+    try {
+      fn(payload)
+    } catch (e) {
+      /* 单个订阅出错不能打断其它订阅 */
+    }
+  })
+}
+
+/** 让 __nativeEmit 生效（不发起 HTTP 时也要装一次钩子） */
+export function ensureNativeHooks() {
+  installHooks()
+}
 
 function abortError() {
   const e = new Error('已停止')
@@ -80,6 +107,8 @@ function installHooks() {
     if (fn === 'chunk') window.__httpChunk(p.id, p.text)
     else if (fn === 'done') window.__httpDone(p.id)
     else if (fn === 'error') window.__httpError(p.id, p.code || 0, p.body || '')
+    else if (fn === 'pick') emitNative('pick', p)
+    else if (fn === 'transfer') emitNative('transfer', p)
   }
 }
 

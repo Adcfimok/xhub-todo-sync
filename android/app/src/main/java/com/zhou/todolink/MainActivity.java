@@ -13,6 +13,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -55,6 +57,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_CAMERA = 1001;
     private static final int REQ_NOTIFY = 1002;
+    private static final int REQ_PICK_FILE = 1003;
     private static final String CHANNEL_ID = "xhub_reminder";
 
     private static final String PREFS = "xhub";
@@ -67,6 +70,8 @@ public class MainActivity extends Activity {
     /** 本次启动的本地端口与上次不同 = 数据分区变了，旧本地数据不会自动出现 */
     private boolean originSwitched = false;
     private int originPort = 0;
+    /** 文件选择是异步的：拿到结果时要知道回给页面哪一次请求 */
+    String pickReqId = null;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -176,6 +181,71 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_FILE) return;
+        final String reqId = pickReqId;
+        pickReqId = null;
+        JSONObject o = new JSONObject();
+        try {
+            o.put("id", reqId == null ? "" : reqId);
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                o.put("ok", false);
+                o.put("error", "已取消");
+            } else {
+                Uri uri = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Throwable ignore) {
+                    /* 部分来源不支持长期授权，本次仍可读 */
+                }
+                String name = null;
+                long size = 0;
+                Cursor c = null;
+                try {
+                    c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}, null, null, null);
+                    if (c != null && c.moveToFirst()) {
+                        int ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                        int si = c.getColumnIndex(OpenableColumns.SIZE);
+                        if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni);
+                        if (si >= 0 && !c.isNull(si)) size = c.getLong(si);
+                    }
+                } finally {
+                    if (c != null) c.close();
+                }
+                if (size <= 0) {
+                    android.content.res.AssetFileDescriptor fd = null;
+                    try {
+                        fd = getContentResolver().openAssetFileDescriptor(uri, "r");
+                        if (fd != null) size = fd.getLength();
+                    } catch (Throwable ignore) {
+                    } finally {
+                        if (fd != null) {
+                            try {
+                                fd.close();
+                            } catch (Throwable ignore) {
+                            }
+                        }
+                    }
+                }
+                if (name == null || name.isEmpty()) name = "未命名文件";
+                o.put("ok", true);
+                o.put("uri", uri.toString());
+                o.put("name", name);
+                o.put("size", size);
+                o.put("mime", String.valueOf(getContentResolver().getType(uri)));
+            }
+        } catch (Throwable e) {
+            try {
+                o.put("ok", false);
+                o.put("error", "读取文件信息失败：" + e.getMessage());
+            } catch (Throwable ignore) {
+            }
+        }
+        bridge.emit("pick", o);
+    }
+
+    @Override
     public void onBackPressed() {
         if (webView == null) {
             super.onBackPressed();
@@ -251,7 +321,7 @@ public class MainActivity extends Activity {
          * 页面侧统一 JSON.parse 后分发。
          * 不再把多段用户数据直接拼进 JS 源码——那是最容易被构造出越界语法的写法。
          */
-        private void emit(String fn, JSONObject payload) {
+        void emit(String fn, JSONObject payload) {
             final String json = payload == null ? "{}" : payload.toString();
             final String js = "try{window.__nativeEmit(" + q(fn) + "," + q(json) + ")}catch(e){}";
             webView.post(() -> {
@@ -480,6 +550,46 @@ public class MainActivity extends Activity {
          * WebView 里 window.open / target=_blank 都出不去（只允许本机资源），
          * 而「获取 API Key」这类指引页必须交给系统浏览器 —— 与桌面端 openExternal 同义。
          */
+        /** 打开系统文件选择器（SAF）。不申请存储权限，只拿用户点选的那一个文件 */
+        @JavascriptInterface
+        public void pickFile(final String reqId) {
+            final MainActivity act = (MainActivity) ctx;
+            act.runOnUiThread(() -> {
+                try {
+                    act.pickReqId = reqId;
+                    Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("*/*");
+                    i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+                    act.startActivityForResult(i, REQ_PICK_FILE);
+                } catch (Throwable e) {
+                    emit("pick", payload(reqId, "ok", false, "error", "打不开文件选择器：" + e.getMessage()));
+                }
+            });
+        }
+
+        /** 手机 → 电脑：分块加密上传，进度通过 transfer 事件回传 */
+        @JavascriptInterface
+        public void startUpload(final String reqId, final String uri, final String name, final long size,
+                                final String mime, final String host, final String token,
+                                final String resumeId, final String sha) {
+            FileTransfer.startUpload(ctx, reqId, Uri.parse(uri), name, size, mime, host, token, resumeId, sha,
+                    o -> emit("transfer", o));
+        }
+
+        /** 电脑 → 手机：按块拉取并解密落盘 */
+        @JavascriptInterface
+        public void startDownload(final String reqId, final String fileId, final String name, final long size,
+                                  final String sha, final String host, final String token) {
+            FileTransfer.startDownload(ctx, reqId, fileId, name, size, sha, host, token,
+                    o -> emit("transfer", o));
+        }
+
+        @JavascriptInterface
+        public void cancelTransfer(final String reqId) {
+            FileTransfer.cancel(reqId);
+        }
+
         @JavascriptInterface
         public void openUrl(final String url) {
             if (url == null || url.isEmpty()) return;

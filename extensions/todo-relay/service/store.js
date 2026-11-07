@@ -382,6 +382,8 @@ class Store {
       id: rec.id,
       deleted: !!rec.deleted,
     }
+    // 文件传输也走同一本账：出问题时能查到「哪台设备、什么时候、收了什么」
+    if (rec.title) entry.title = String(rec.title).slice(0, 80)
     this.state.audit.push(entry)
     if (this.state.audit.length > AUDIT_LIMIT) {
       this.state.audit.splice(0, this.state.audit.length - AUDIT_LIMIT)
@@ -714,6 +716,8 @@ class Store {
       lastSeen: Date.now(),
       revoked: false,
       cursor: existing ? existing.cursor || 0 : 0,
+      // 文件传输开关：老设备没有这个字段，一律按允许处理（undefined !== false）
+      allowFiles: existing && existing.allowFiles === false ? false : true,
     }
     this.state.pair = null
     this.scheduleSave()
@@ -739,6 +743,17 @@ class Store {
     if (wasOffline) this.emit('peer', { deviceId, online: true })
   }
 
+  /** 单设备开关（目前只有文件传输用）：改完立刻落盘并广播，页面无需轮询 */
+  setDeviceFlag(deviceId, key, value) {
+    const d = this.state.devices[deviceId]
+    if (!d) return false
+    if (key !== 'allowFiles') return false
+    d.allowFiles = !!value
+    this.scheduleSave()
+    this.emit('peer', { deviceId, allowFiles: !!value })
+    return true
+  }
+
   revoke(deviceId) {
     const d = this.state.devices[deviceId]
     if (!d) return false
@@ -757,6 +772,7 @@ class Store {
       pairedAt: d.pairedAt,
       lastSeen: d.lastSeen,
       revoked: d.revoked,
+      allowFiles: d.allowFiles !== false,
       online: !d.revoked && Date.now() - (d.lastSeen || 0) < 90 * 1000,
     }))
   }

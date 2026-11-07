@@ -537,3 +537,101 @@ body {
   color: var(--ink-3);
 }
 .scope.bad { color: var(--red); }
+
+/* ---------- 文件传输 ---------- */
+.files .drop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--well);
+  transition: border-color .15s, background .15s;
+}
+.files .drop.over { border-color: var(--accent); }
+.drop-hint { font-size: 11.5px; color: var(--ink-3); }
+.up-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.up { border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px; background: var(--surface); }
+.up.bad { border-color: var(--red); }
+.up-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+.up-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-pct { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.up-track { height: 4px; border-radius: 2px; background: var(--well); margin-top: 6px; overflow: hidden; }
+.up-track i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .18s ease; }
+.up-err { margin-top: 4px; font-size: 11px; color: var(--red); }
+
+.file-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; min-height: 0; }
+.file-col { min-width: 0; display: flex; flex-direction: column; }
+.file-col h3 {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 216px;
+  overflow-y: auto;
+}
+.file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--well);
+}
+.fic {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--accent);
+}
+.fmeta { min-width: 0; flex: 1; }
+.fname { font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsub { margin-top: 1px; font-size: 10.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frisk {
+  flex: none;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 5px;
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+.file .revoke {
+  flex: none;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  border-radius: 5px;
+}
+.file .revoke:hover { background: var(--surface); color: var(--red); }
+.file .revoke.ghost:hover { color: var(--accent); }
+.device .fileflag { font-size: 10.5px; }
+.device .fileflag.on { color: var(--green); }
+.device .fileflag.off { color: var(--ink-3); }
+
+@media (max-width: 900px) {
+  .file-cols { grid-template-columns: 1fr; }
+}

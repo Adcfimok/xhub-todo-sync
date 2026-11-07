@@ -70,6 +70,32 @@
     </aside>
 
     <main class="col-right">
+      <section class="panel files" id="files-panel">
+        <h2>文件传输<span class="hint" id="files-quota">—</span>
+          <button class="link" id="btn-files-clear-out" type="button">清空待接收</button>
+        </h2>
+        <div class="drop" id="file-drop">
+          <input type="file" id="file-input" multiple hidden />
+          <button class="btn primary" id="btn-pick-file" type="button">选择文件发送到手机</button>
+          <span class="drop-hint">拖进来也可以 · 单文件 ≤ 512MB · 分块断点 · 局域网内 AES-256-GCM</span>
+        </div>
+        <div class="up-list" id="file-progress"></div>
+        <div class="file-cols">
+          <div class="file-col">
+            <h3>待接收<span class="count" id="out-count">0</span></h3>
+            <ul class="file-list" id="file-out"></ul>
+            <div class="empty" id="file-out-empty" hidden>没有等待手机接收的文件</div>
+          </div>
+          <div class="file-col">
+            <h3>收件箱<span class="count" id="in-count">0</span>
+              <button class="link" id="btn-files-clear-in" type="button">清空</button>
+            </h3>
+            <ul class="file-list" id="file-in"></ul>
+            <div class="empty" id="file-in-empty" hidden>手机发来的文件会出现在这里</div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel grow">
         <h2>同步内容<span class="hint" id="content-hint"></span></h2>
         <p class="scope" id="scope-line">读取：待办 / 笔记 / 便签 / 速达 / 提示词（只读字段）。写回：仅待办（标题、完成、优先级、截止、备注）与便签内容。</p>

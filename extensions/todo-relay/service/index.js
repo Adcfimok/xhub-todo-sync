@@ -16,6 +16,7 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const { Store, COLLECTIONS, normalizeRecord } = require('./store')
+const { FileHub, MAX_CHUNK_BODY } = require('./files')
 
 const PORT = parseInt(process.env.PORT || '47821', 10)
 const HOST = process.env.XHUB_LISTEN_HOST || '0.0.0.0'
@@ -25,6 +26,9 @@ const BODY_LIMIT = 2 * 1024 * 1024
 const LOCAL_ONLY = ['/api/local', '/api/admin']
 const EXT_ROOT = path.join(__dirname, '..', '..')
 const KV_FILE = path.join(__dirname, '..', '.data', 'kv.json')
+const DATA_DIR = process.env.RELAY_DATA_DIR
+  ? path.resolve(process.env.RELAY_DATA_DIR)
+  : path.join(__dirname, '..', '.data')
 
 const netinfo = require('./netinfo')
 const store = new Store(os.hostname())
@@ -33,6 +37,10 @@ const bridgeWaiters = new Map()
 let lastLocalPoll = 0
 
 store.onChange((event, payload) => broadcast(event, payload))
+
+// 文件传输：与同步共用配对令牌，但走独立的二进制通道
+const files = new FileHub(DATA_DIR)
+files.onEvent = (payload) => broadcast('file', payload)
 
 function broadcast(event, payload) {
   // 带 id 才能让 EventSource 在重连时自动回传 Last-Event-ID，断线期间的变更可精确补齐
@@ -182,6 +190,52 @@ function readBody(req) {
   })
 }
 
+/** 二进制体读取：文件块专用，超限与 JSON 接口同样返回 413 而不是断连接 */
+function readBinary(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    let aborted = false
+    const chunks = []
+    req.on('data', (c) => {
+      if (aborted) return
+      size += c.length
+      if (size > limit) {
+        aborted = true
+        chunks.length = 0
+        req.removeAllListeners('data')
+        req.resume()
+        reject(Object.assign(new Error('payload too large'), { code: 'PAYLOAD_TOO_LARGE' }))
+        return
+      }
+      chunks.push(c)
+    })
+    req.on('end', () => {
+      if (!aborted) resolve(Buffer.concat(chunks))
+    })
+    req.on('error', reject)
+  })
+}
+
+const FILE_STATUS = {
+  NOT_FOUND: 404, BAD_ID: 400, BAD_SIZE: 400, BAD_CHUNK: 400, BAD_INDEX: 416,
+  BAD_STATE: 409, OFFSET: 409, INCOMPLETE: 409, HASH_MISMATCH: 422,
+  TOO_LARGE: 413, QUOTA_FULL: 507, NO_SPACE: 507, EXPIRED: 410, DECRYPT_FAIL: 400,
+}
+
+function fileFail(res, r) {
+  return fail(res, FILE_STATUS[r.code] || 400, r.code, r)
+}
+
+function sendBinary(res, buf, headers) {
+  res.writeHead(200, Object.assign({
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': buf.length,
+    'Cache-Control': 'no-store',
+    'Access-Control-Expose-Headers': 'X-File-Name, X-Chunks, X-Total, X-Sha256, X-Chunk-Index, X-Chunk-Size',
+  }, res._cors || {}, headers || {}))
+  res.end(buf)
+}
+
 /** 滑动窗口限流：按「来源 + 路径前缀」计数，超限返回 429 */
 const rateBuckets = new Map()
 function rateLimit(key, max, windowMs) {
@@ -202,6 +256,8 @@ setInterval(() => {
 /** 每类接口的阈值：配对最容易被打，给得最紧 */
 function limitFor(pathname) {
   if (pathname === '/api/v1/pair') return { max: 10, windowMs: 60000, bucket: 'pair' }
+  if (pathname.startsWith('/api/v1/files/')) return { max: 900, windowMs: 60000, bucket: 'files' }
+  if (pathname.startsWith('/api/local/files/')) return { max: 900, windowMs: 60000, bucket: 'files' }
   if (pathname.startsWith('/api/v1/sync')) return { max: 120, windowMs: 60000, bucket: 'sync' }
   if (pathname.startsWith('/api/v1/')) return { max: 240, windowMs: 60000, bucket: 'v1' }
   return { max: 600, windowMs: 60000, bucket: 'local' }
@@ -557,6 +613,97 @@ const server = http.createServer(async (req, res) => {
       })
     }
 
+    // ---------------------------------------------------------------- 文件传输（手机侧）
+    // 与同步共用 Bearer 令牌；每台设备另有 allowFiles 开关，关掉后连枚举都不给。
+    if (pathname.startsWith('/api/v1/files/')) {
+      const dev = store.auth(tokenOf(req, url))
+      if (!dev) return fail(res, 401, 'UNAUTHORIZED')
+      if (dev.allowFiles === false) return fail(res, 403, 'FILE_FORBIDDEN')
+      store.touch(dev.id)
+      await files.ready
+      const id = url.searchParams.get('id') || ''
+      const idx = Number(url.searchParams.get('i'))
+
+      if (pathname === '/api/v1/files/offer' && req.method === 'POST') {
+        const r = await files.createUpload(dev, await readBody(req))
+        if (r.code) return fileFail(res, r)
+        return send(res, 200, Object.assign({ ok: true, proto: 1 }, r))
+      }
+
+      if (pathname === '/api/v1/files/chunk' && req.method === 'POST') {
+        if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, 'BAD_INDEX')
+        const body = await readBinary(req, MAX_CHUNK_BODY)
+        const r = await files.appendUpload(id, idx, tokenOf(req, url), body)
+        if (r.code) return fileFail(res, r)
+        return send(res, 200, r)
+      }
+
+      if (pathname === '/api/v1/files/finish' && req.method === 'POST') {
+        const b = await readBody(req)
+        const r = await files.finishUpload(b.id, tokenOf(req, url), b.sha256)
+        if (r.code) return fileFail(res, r)
+        // 电脑上的落盘路径不回传给手机，避免泄露主机目录结构
+        store.audit('file-receive', { col: 'files', id: r.id, title: r.name }, dev.id)
+        return send(res, 200, { ok: true, id: r.id, name: r.name, size: r.size, sha256: r.sha256, at: r.at, risk: r.risk })
+      }
+
+      if (pathname === '/api/v1/files/status' && req.method === 'GET') {
+        const st = files.status(id)
+        if (!st) return fail(res, 404, 'NOT_FOUND')
+        if (st.dir === 'in' && files.items.get(id).deviceId !== dev.id) return fail(res, 403, 'FORBIDDEN')
+        return send(res, 200, st)
+      }
+
+      if (pathname === '/api/v1/files/abort' && req.method === 'POST') {
+        const b = await readBody(req)
+        const ok = await files.abort(b.id, dev.id)
+        return ok ? send(res, 200, { ok: true }) : fail(res, 404, 'NOT_FOUND')
+      }
+
+      if (pathname === '/api/v1/files/pending' && req.method === 'GET') {
+        return send(res, 200, {
+          offers: files.pendingFor(dev.id),
+          stats: files.stats(),
+          maxFile: files.maxFile,
+          chunkSize: 2 * 1024 * 1024,
+        })
+      }
+
+      if (pathname === '/api/v1/files/history' && req.method === 'GET') {
+        return send(res, 200, { items: files.history(dev.id), maxFile: files.maxFile })
+      }
+
+      if (pathname === '/api/v1/files/decline' && req.method === 'POST') {
+        const b = await readBody(req)
+        const ok = await files.decline(b.id, dev.id)
+        return ok ? send(res, 200, { ok: true }) : fail(res, 404, 'NOT_FOUND')
+      }
+
+      if (pathname === '/api/v1/files/pull' && req.method === 'GET') {
+        if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, 'BAD_INDEX')
+        const r = await files.pullChunk(id, idx, tokenOf(req, url))
+        if (r.code) return fileFail(res, r)
+        return sendBinary(res, r.buf, {
+          'X-File-Name': encodeURIComponent(r.name),
+          'X-Chunks': String(r.chunks),
+          'X-Total': String(r.total),
+          'X-Sha256': r.sha256,
+          'X-Chunk-Index': String(r.index),
+          'X-Chunk-Size': String(Math.min(2 * 1024 * 1024, r.total - r.index * 2 * 1024 * 1024)),
+        })
+      }
+
+      if (pathname === '/api/v1/files/pull/finish' && req.method === 'POST') {
+        const b = await readBody(req)
+        const r = await files.finishPull(b.id, b.sha256, dev.id)
+        if (r.code) return fileFail(res, r)
+        store.audit('file-send', { col: 'files', id: r.id, title: r.name }, dev.id)
+        return send(res, 200, Object.assign({ ok: true }, r))
+      }
+
+      return fail(res, 404, 'NOT_FOUND')
+    }
+
     if (pathname === '/api/v1/snapshot') {
       const dev = store.auth(tokenOf(req, url))
       if (!dev) return fail(res, 401, 'UNAUTHORIZED')
@@ -688,6 +835,78 @@ const server = http.createServer(async (req, res) => {
       if (body.error) w.reject(new Error(String(body.error)))
       else w.resolve(body.result === undefined ? null : body.result)
       return send(res, 200, { ok: true })
+    }
+
+    // ---------------------------------------------------------------- 文件传输（本机页面）
+    if (pathname.startsWith('/api/local/files/')) {
+      await files.ready
+
+      if (pathname === '/api/local/files/state' && req.method === 'GET') {
+        return send(res, 200, {
+          inbox: files.listInbox(),
+          out: files.listOut(),
+          stats: files.stats(),
+          maxFile: files.maxFile,
+          chunkSize: 2 * 1024 * 1024,
+          devices: store.deviceList(),
+        })
+      }
+
+      if (pathname === '/api/local/files/send/init' && req.method === 'POST') {
+        const r = await files.createOutgoing(await readBody(req))
+        if (r.code) return fileFail(res, r)
+        return send(res, 200, Object.assign({ ok: true }, r))
+      }
+
+      if (pathname === '/api/local/files/send/chunk' && req.method === 'POST') {
+        const id = url.searchParams.get('id') || ''
+        const ct = String(req.headers['content-type'] || '')
+        let body = null
+        const offRaw = url.searchParams.get('off')
+        let offset = offRaw == null || offRaw === '' ? NaN : Number(offRaw)
+        if (ct.indexOf('application/json') === 0) {
+          // 宿主的扩展 iframe 只能发字符串：小块 base64 走这里
+          const j = await readBody(req)
+          body = Buffer.from(String(j.data || ''), 'base64')
+          if (j.off != null) offset = Number(j.off)
+        } else {
+          body = await readBinary(req, MAX_CHUNK_BODY)
+        }
+        if (!Number.isInteger(offset) || offset < 0) {
+          const idx = Number(url.searchParams.get('i'))
+          offset = Number.isInteger(idx) && idx >= 0 ? idx * 2 * 1024 * 1024 : -1
+        }
+        const r = await files.appendLocal(id, offset, body)
+        if (r.code) return fileFail(res, r)
+        return send(res, 200, r)
+      }
+
+      if (pathname === '/api/local/files/send/finish' && req.method === 'POST') {
+        const b = await readBody(req)
+        const r = await files.finishOutgoing(b.id)
+        if (r.code) return fileFail(res, r)
+        return send(res, 200, Object.assign({ ok: true }, r))
+      }
+
+      if (pathname === '/api/local/files/remove' && req.method === 'POST') {
+        const b = await readBody(req)
+        const ok = await files.remove(b.id)
+        return ok ? send(res, 200, { ok: true }) : fail(res, 404, 'NOT_FOUND')
+      }
+
+      if (pathname === '/api/local/files/clear' && req.method === 'POST') {
+        const b = await readBody(req)
+        const n = await files.clear(b.scope === 'out' ? 'out' : b.scope === 'in' ? 'in' : '')
+        return send(res, 200, { ok: true, removed: n })
+      }
+
+      if (pathname === '/api/local/files/allow' && req.method === 'POST') {
+        const b = await readBody(req)
+        const ok = store.setDeviceFlag(b.deviceId, 'allowFiles', !!b.allow)
+        return ok ? send(res, 200, { ok: true }) : fail(res, 404, 'NOT_FOUND')
+      }
+
+      return fail(res, 404, 'NOT_FOUND')
     }
 
     if (pathname === '/api/admin/state') {
@@ -894,6 +1113,11 @@ server.on('clientError', (err, socket) => {
   }
 })
 
+files.ready.then(() => {
+  const st = files.stats()
+  console.log(`[todo-relay] files: ${(st.inbox / 1048576).toFixed(1)}MiB in / ${(st.out / 1048576).toFixed(1)}MiB out, quota ${(st.quota / 1048576).toFixed(0)}MiB`)
+}).catch((e) => console.error('[files] init failed:', e.message))
+
 server.listen(PORT, HOST, () => {
   const addr = server.address()
   console.log(`[todo-relay] listening on ${HOST}:${addr.port} (proto ${PROTO})`)
@@ -917,6 +1141,7 @@ function shutdown(sig) {
   console.log('[todo-relay] shutting down:', sig)
   try {
     store.flushSync()
+    files.saveSync()
   } catch (e) {
     console.error('[todo-relay] 退出前落盘失败:', e.message)
   }
