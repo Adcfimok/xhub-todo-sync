@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>待办同步</title>
+<link rel="stylesheet" href="./view.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="top-left">
+      <h1>待办同步</h1>
+      <span class="chip" id="status-chip" data-state="offline"><i class="dot"></i><span id="status-text">正在连接…</span></span>
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="btn-sync" type="button">立即同步</button>
+      <button class="btn ghost" id="btn-rotate" type="button">换配对码</button>
+    </div>
+  </header>
+
+  <div class="fatal-bar" id="fatal-bar" hidden></div>
+
+  <div class="grid">
+    <aside class="col-left">
+      <section class="panel">
+        <h2>配对手机<span class="hint">手机 App 扫码，或手输地址与配对码</span></h2>
+        <div class="pair">
+          <div class="qr" id="qr" aria-label="配对二维码"></div>
+          <div class="pair-info">
+            <div class="code" id="pair-code">······</div>
+            <div class="hint" id="pair-hint">5 分钟内有效</div>
+            <div class="primary-addr">
+              <code id="primary-addr">—</code>
+              <button class="copy" id="btn-copy-addr" type="button">复制</button>
+            </div>
+            <div class="addr-tag" id="primary-tag"></div>
+            <div class="net-warn" id="net-warn" hidden></div>
+            <button class="perm-btn" id="btn-perm" type="button" hidden>打开扩展权限设置</button>
+            <ul class="addrs" id="addrs"></ul>
+          </div>
+        </div>
+        <p class="note" id="pair-note">服务尚未就绪。</p>
+      </section>
+
+      <section class="panel">
+        <h2>设备<span class="count" id="dev-count">0</span></h2>
+        <ul class="devices" id="devices"></ul>
+      </section>
+
+      <section class="panel">
+        <h2>安卓客户端<span class="hint">从 GitHub Releases 下载</span></h2>
+        <button class="dl" id="btn-download" type="button">
+          <span class="dl-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 2.5v7.2M5.2 7.2 8 10l2.8-2.8M3 12.5h10" />
+            </svg>
+          </span>
+          <span class="dl-meta">
+            <span class="dl-title" id="dl-title">下载安卓端 APK</span>
+            <span class="dl-sub" id="dl-sub">读取版本…</span>
+          </span>
+          <span class="dl-go" aria-hidden="true">↗</span>
+        </button>
+        <div class="dl-foot">
+          <button class="copy" id="btn-copy-dl" type="button">复制链接</button>
+          <button class="link" id="btn-dl-notes" type="button">版本说明</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="col-right">
+      <section class="panel grow">
+        <h2>同步内容<span class="hint" id="content-hint"></span></h2>
+        <p class="scope" id="scope-line">读取：待办 / 笔记 / 便签 / 速达 / 提示词（只读字段）。写回：仅待办（标题、完成、优先级、截止、备注）与便签内容。</p>
+        <div class="col-stats" id="col-stats"></div>
+        <ul class="items" id="content"></ul>
+      </section>
+
+      <section class="panel">
+        <h2>冲突记录<span class="count" id="conflict-count">0</span>
+          <button class="link" id="btn-clear-conflicts" type="button">清空</button>
+        </h2>
+        <ul class="conflicts" id="conflicts"></ul>
+        <div class="empty" id="conflicts-empty" hidden>没有冲突，两端一致</div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="bar">
+    <span id="bar-left">—</span>
+    <span class="spacer"></span>
+    <span id="bar-right"></span>
+  </footer>
+
+  <script src="./vendor/qrcode.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
