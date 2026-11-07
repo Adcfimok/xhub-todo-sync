@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-07T10:14:41.268Z",
+  "checkedAt": "2026-11-07T10:35:09.023Z",
   "counts": {
-    "total": 7,
-    "ok": 7,
+    "total": 8,
+    "ok": 8,
     "drift": 0,
     "warn": 0
   },
@@ -80,6 +80,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.1/com.zhou.todo-relay-2.2.1.zip",
       "tagCommit": "6128c02b8833fa41ac75e00108150dd9d2752167",
+      "issues": []
+    },
+    {
+      "id": "xhub-ext-2.2.2",
+      "version": "2.2.2",
+      "kind": "xhub-extension",
+      "tag": "xhub-ext-v2.2.2",
+      "file": "dist/com.zhou.todo-relay-2.2.2.zip",
+      "status": "ok",
+      "artifact": {
+        "bytes": 73051,
+        "sha256": "760dba2648d79b9cfe8e9bfdab39b59e590f51681dd297ef63e22a4422a8d5de",
+        "commit": "63e96dde3d5d191619567981c6027a2c71a71d30",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/xhub-ext-v2.2.2",
+        "tag": "xhub-ext-v2.2.2",
+        "assets": [
+          "com.zhou.todo-relay-2.2.2.zip"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.2/com.zhou.todo-relay-2.2.2.zip",
+      "tagCommit": "63e96dde3d5d191619567981c6027a2c71a71d30",
       "issues": []
     },
     {
