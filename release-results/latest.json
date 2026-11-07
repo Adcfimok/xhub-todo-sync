@@ -5,9 +5,11 @@
   "actualOrder": [
     "xhub-ext-2.1.0",
     "xhub-ext-2.2.0",
+    "xhub-ext-2.2.1",
     "android-apk-2.7.0",
     "android-apk-2.8.0",
-    "android-apk-2.9.0"
+    "android-apk-2.9.0",
+    "android-apk-2.9.1"
   ],
   "results": [
     {
@@ -35,16 +37,34 @@
       "file": "dist/com.zhou.todo-relay-2.2.0.zip",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 59106,
       "sha256": "5d0eedbae8147697defac2b385d117891f09e36369ef5dad095124a2750a946e",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.0/com.zhou.todo-relay-2.2.0.zip",
-      "uploadedAt": "2026-11-07T09:20:02.263Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "xhub-ext-v2.2.0",
       "commit": "3597ed39b21eb4e1ed3cc539c3c0e6f5278e720b",
       "notes": "# 待办同步扩展 · x-hub v2.2.0\n\n左栏新增「安卓客户端」下载卡片，把手机端 APK 的 GitHub 下载入口放进扩展里，不用再翻仓库。\n\n## 本版内容\n\n- **新增安卓端下载卡片**：位于左栏「设备」面板下方，常驻显示，不折叠、不需要展开。\n  整行是一颗按钮，点击经宿主 `openExternal` 在应用内浏览器打开 APK 直链；\n  右侧「复制链接」把直链写进剪贴板，方便粘贴到手机浏览器或聊天窗口；「版本说明」跳 Release 页。\n- **补 `open-url` 权限**：manifest 的 `permissions` 增加 `open-url`。这一步不能省——\n  宿主扩展 iframe 的 sandbox 是 `allow-scripts allow-same-origin allow-downloads`，\n  没有 `allow-popups`，`target=\"_blank\"` 与 `window.open()` 会被静默拦截（点了没反应）。\n- **样式沿用现有卡片**：复用 `--well / --line / --accent` 变量与设备卡的 9px 圆角、1px 边框、\n  相同内边距，浅色/深色主题下都与相邻面板对齐（实测宽度差 ≤1px）。\n\n## 下载卡片的行为\n\n| 操作 | 结果 |\n| --- | --- |\n| 点击卡片主体 | 打开 `todo-link-2.9.0.apk` 直链（GitHub Releases） |\n| 点「复制链接」 | 复制 APK 直链，按钮短暂显示「已复制」 |\n| 点「版本说明」 | 打开该版本的 Release 页面 |\n\n卡片上的版本号与文件大小是页面内常量（`view/app.js` 的 `ANDROID_DL`），发新版时与\n`_tools/release-upload/versions.json` 的 `android-apk` 条目一起改。\n\n## 安装\n\n1. 下载 `com.zhou.todo-relay-2.2.0.zip`，解压到任意目录（`service/` 必须完整）。\n2. x-hub → 扩展中心 → 我的扩展 → 添加扩展，指向解压后的目录（含 `manifest.json`）。\n3. 打开扩展页，左栏底部应出现「安卓客户端」卡片；点击应唤起床载浏览器打开下载页。\n\n## 从 2.1.0 升级\n\n覆盖解压到原目录即可，`.data/` 里的配对记录与设备令牌不受影响（压缩包本身不含 `.data`）。\n新增的 `open-url` 权限首次调用时宿主可能要求确认，确认后生效。\n\n## 环境要求\n\n- x-hub 桌面版 0.9.4+（常驻后台能力、`openExternal` 桥）\n- 扩展后端为 Node 18+，监听 `47821`\n- 下载卡片需要能访问 GitHub\n\n## 已知限制\n\n- `data.*` 由电脑端「待办同步」页面代答，页面关闭时扩展会显示「电脑端页面未打开」。\n- 公共 Wi-Fi 下不建议开启：协议为局域网明文 HTTP，仅靠令牌准入。\n- 下载链接写死在页面里，不联网查询最新版本；发版后需同步更新常量。\n\n## 校验\n\n```bash\n# 解压后\nnode service/index.js                 # 应打印监听 47821\ncurl http://127.0.0.1:47821/healthz    # {\"ok\":true}\n```\n\n界面回归：`node _tools/extension-download-check.mjs --shots`\n（校验卡片位置、文案、跳转、复制、与相邻面板等宽，浅色/深色各跑一遍）。\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
       "releaseName": "待办同步扩展 · x-hub v2.2.0"
+    },
+    {
+      "id": "xhub-ext-2.2.1",
+      "version": "2.2.1",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-2.2.1.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 72522,
+      "sha256": "a6722bb91f418ec0ccfd722325146ddb13883ea044a2ffd3b917b381769307fc",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.1/com.zhou.todo-relay-2.2.1.zip",
+      "uploadedAt": "2026-11-07T10:14:35.736Z",
+      "tag": "xhub-ext-v2.2.1",
+      "commit": "6128c02b8833fa41ac75e00108150dd9d2752167",
+      "notes": "# 待办同步扩展 · x-hub v2.2.1\n\n安全与可靠性审计修复版：26 项问题中落地 24 项，其余 2 项因涉及协议变更单独排期。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 扩展 ID | `com.zhou.todo-relay` |\n| 版本 | 2.2.1 |\n| 后端 | Node 18+，监听 `47821` |\n| 新增权限 | `open-url`（下载卡片打开外链） |\n\n## 安全修复\n\n- **本机接口 CSRF 收口**：以前 `isLocal()` 只看 `remoteAddress`，恶意网页从本机浏览器发请求同样命中；加上 `Access-Control-Allow-Origin: *` 与无条件放行的 OPTIONS，攻击链可以「读配对码 → 自行配对 → 永久读写」。\n  现在按路径分流：`/api/v1/*` 保留 `*`（Bearer 令牌、不依赖 Cookie，无 CSRF 面），`/api/local/*`、`/api/admin/*`、`/api/v1/diag` 改为 Origin 白名单 + 强制 `X-Hub-Local: 1` 自定义头（跨站发不出自定义头，预检会被拦）。\n- **删除 `/api/ai/chat`**：该端点把请求体的 `baseURL` 原样 `fetch`，可打内网与 `169.254.169.254`；手机端早已改走 native 直连，此端点零调用方，直接下线。\n- **配对码真正封禁**：以前 `TOO_MANY_ATTEMPTS` 只是返回文案，猜对照样通过。现在先判锁定再比码，错满 5 次锁定当前码（429 + `TOO_MANY_ATTEMPTS`），比较改用 `timingSafeEqual` 消除时间侧信道。\n- **HLC 时钟漂移上限**：`observe()` 拒绝超前 5 分钟、落后 1 年的时间戳并返回原因，写入审计；`next()` 加单调保护，系统时间回拨也不会产生更小的键。\n- **速率限制**：pair 10/分、sync 120/分、其它 240/分，超限 429 + `Retry-After`。\n- **服务器超时与连接上限**：`headersTimeout 15s`、`requestTimeout 30s`、`keepAliveTimeout 5s`、`maxConnections 64`，并处理 `clientError`。\n\n## 可靠性修复\n\n- **坏库不再静默重置**：以前解析失败就按空库启动，第一次落盘会把损坏文件覆盖掉。现在隔离为 `hub.json.corrupt-<ts>`、尝试 `.bak` 恢复，都不行则**只读启动**并在页面顶部显示红条。\n- **落盘失败可重试**：`dirty` 改到写成功后才清；失败按 1s→30s 退避重试，`saveFails` 透出到页面。\n- **写入量下降**：每次提交只追加 WAL（几百字节），全量快照转异步，攒够 200 条或 60 秒才做一次，且先备份再 rename。\n- **413 真正可达**：超限时改为 `req.resume()` 丢弃剩余体，不再 `destroy()` 导致客户端只看到连接重置。\n- **KV 损坏隔离**：`kv.json` 与状态库同策略，不再静默重置后覆盖。\n- **异常退出前落盘**：`uncaughtException` 先 `flushSync()` 再退出，交给宿主拉起。\n\n## 功能与体验\n\n- **SSE 正式接入**：服务端 `/api/v1/stream` 早就写好但两端都没接，只能靠 4 秒 / 30 秒轮询。现在 PC 端走 `/api/local/stream`、手机端走 `/api/v1/stream`，改动基本即时到达；SSE 正常时 PC 轮询降为 20 秒兜底、手机端降为 120 秒。\n- **断线续传**：事件带 `id`，重连时按 `Last-Event-ID` 补发断线期间的变更。\n- **冲突能说清字段**：手机端补 `diffFields()`，冲突详情不再是一片空白。\n- **长备注不再被截**：`description` 上限从 200 提到 20000，与 notes 的 20 万、snippets 的 2 万统一到一张 `FIELD_LIMITS` 表；超长会告警。\n- **审计日志**：环形缓冲 500 条，`GET /api/admin/audit?limit=` 只读查询，记录谁在何时改了哪条。\n- **页面可靠性告警条**：库损坏、只读、写盘失败会在顶部红条/橙条显示，不再只打在控制台。\n- **安卓端下载卡片**（2.2.0 引入）：左栏「设备」下方常驻，点击经 `openExternal` 打开 APK 直链。\n\n## 升级说明\n\n覆盖解压到原扩展目录即可，`.data/hub.json` 格式未变，**不需要重新配对**。\n若之前连续输错配对码 5 次以上，旧码会被锁定，点一次「换配对码」即可。\n\n## 验证\n\n```bash\n# 解压本包后用仓库里的验证包\nnode run-all.mjs\n# 预期：端到端 41 通过、安全可靠性 27 通过\n```\n\n或单独跑：\n\n```bash\nnode tests/e2e.mjs        # 功能回归\nnode tests/security.mjs   # 安全与可靠性（27 项断言）\n```\n\n## 已知限制\n\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现），公共 Wi-Fi 下不建议开启。\n- 快照仍为全量拉取，未做游标分页（P2-25 未实现），记录数极大时首次同步偏慢。\n- `data.*` 由电脑端页面代答，页面关闭时扩展显示「电脑端页面未打开」。",
+      "releaseName": "待办同步扩展 · x-hub v2.2.1"
     },
     {
       "id": "android-apk-2.7.0",
@@ -99,13 +119,31 @@
       "commit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
       "notes": "# 待办同步 · 安卓端 v2.9.0\n\n底部悬浮导航栏整体上移，落到单手拇指自然够得着的区域；横屏/矮屏自动收回贴边，避免挤占正文。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 13 |\n| versionName | 2.9.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n\n## 本版变更\n\n- **底部导航栏上移**：胶囊下沿到可用区底边的距离由固定 22px 改为 `clamp(44px, 7vh, 64px)`，屏幕越高抬得越多，落在拇指自然停留的下缘 1/8 区域。\n- **四个耦合数值收拢为 CSS 变量**：`--dock-h`（胶囊高度）、`--dock-lift`（下沿抬升量）、`--dock-clear`（内容呼吸区），列表留白、toast 提示条、AI 输入胶囊三处跟随，杜绝「抬了底栏、内容还被压住」。\n- **横屏/矮屏自适应**：`@media (max-height: 480px)` 下 lift 收到 10px、clear 收到 20px，避免横向场景挤掉正文。\n- **刘海屏/手势导航适配**：所有底部偏移叠加 `env(safe-area-inset-bottom)`，安全区与手势条天然避让。\n- **修复版本号未随构建生效**：此前 `AndroidManifest.xml` 硬编码 versionCode/versionName 覆盖了构建参数，本版清单与 `build.sh` 统一为 13 / 2.9.0。\n\n## 升级说明\n\n与 2.8.0 同一签名证书（SHA-256 `0be758eb…`），**可直接覆盖安装，本地数据与登录态保留**（数据保留机制见 `docs/06`）。\n\n## 安装\n\n1. 下载 `todo-link-2.9.0.apk`，允许「安装未知来源应用」。\n2. 打开「我的 → 同步与设置」→ 扫码（推荐）或手输主地址 + 6 位配对码。\n3. 配对成功后首页出现五类计数卡片。\n\n## 验收记录\n\n- 底栏几何校验：`_tools/navbar-check.mjs` 在 5 种视口（360×740 / 390×844 / 412×915 / 430×932 / 740×360）下全部通过，胶囊间距、列表留白、toast、AI 输入胶囊均无重叠、无遮挡。\n- 横屏滚动到底验证：末块内容与胶囊上沿留 30px 余量，可完整露出。\n- 版本号复检：`aapt dump badging` 返回 versionCode 13 / versionName 2.9.0，签名 SHA-256 与 2.8.0 一致。\n\n## 校验\n\n```bash\napksigner verify --print-certs todo-link-2.9.0.apk   # 证书应为 0be758eb…\naapt dump badging todo-link-2.9.0.apk | head -2      # versionCode 13 / 2.9.0\n```\n\n资产 SHA-256 见本页附件信息，或 `node _tools/release-upload/verify.mjs` 输出。",
       "releaseName": "待办同步 安卓端 v2.9.0"
+    },
+    {
+      "id": "android-apk-2.9.1",
+      "version": "2.9.1",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.9.1.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 187105,
+      "sha256": "e28c6ae60ec09fee5c290faa2b60fcd4738c2ff01c256ad226d1a0a9f4f2eb01",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.1/todo-link-2.9.1.apk",
+      "uploadedAt": "2026-11-07T10:14:38.045Z",
+      "tag": "android-v2.9.1",
+      "commit": "3aaea31b4fb0f2aa7ca60521b0e8b99fee62cadb",
+      "notes": "# 待办同步 · 安卓端 v2.9.1\n\n安全与可靠性审计修复版的手机端：版本号不再写死、同步改为实时推送、被拒绝的修改不再静默丢失。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 14 |\n| versionName | 2.9.1 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `e28c6ae60ec09fee5c290faa2b60fcd4738c2ff01c256ad226d1a0a9f4f2eb01` |\n\n## 本版变更\n\n- **版本号读真实包信息**（P2-21）：原生 `appVersion()` 以前写死 `\"2.7.0\"`，APK 已经是 2.9.x 却仍上报旧版本。\n  现在改读 `PackageManager.getPackageInfo(...).versionName`，前端优先用原生值，取不到才回退构建常量。\n- **同步改为 SSE 推送**（P1-14）：之前只靠 30 秒定时器，PC 上改完待办，手机最长半分钟后才变。\n  现在连 `/api/v1/stream`，改动基本即时到达；SSE 正常时兜底轮询放宽到 120 秒，省电。\n- **被拒绝的修改不再静默丢失**（P0-4）：以前服务端返回 `rejected` 时手机端直接清 `dirty`，\n  这条改动既不重试、也等不到远端覆盖，永远悬空。现在记进冲突表并标 `blocked`，让胜出版本落地，同时保留本地原值可查。\n- **冲突能说清字段**（P1-9）：补 `diffFields()`，冲突详情会列出具体是哪几个字段（标题 / 截止 / 备注…）不一致，\n  而不是只显示「有冲突」。\n- **原生回调收敛为单入口**（P2-24）：`evaluateJavascript` 不再把多段数据拼进 JS 源码，\n  改为 `__nativeEmit(fn, json)`，参数一律 JSON 序列化后由页面侧解析。\n- **静态资源服务并发化**（P1-17）：`AssetServer` 从单线程串行改为 4 线程池，\n  页面加载时并发拉取多个 js/css 不再互相排队，冷启动白屏时间下降。\n\n## 升级说明\n\n与 2.9.0 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**（见 `docs/06`）。\n不需要重新配对。\n\n## 安装\n\n1. 下载 `todo-link-2.9.1.apk`，允许「安装未知来源应用」。\n2. 覆盖安装即可；首次打开若提示版本变化属正常。\n3. 打开「我的 → 同步与设置」，确认状态为「已连接」；配对信息无需重填。\n\n## 验收记录\n\n- 构建：`aapt dump badging` 返回 `versionCode='14' versionName='2.9.1'`。\n- 签名：SHA-256 `0be758eb…` 与 2.9.0 一致，可覆盖安装。\n- 包内确认：`assets/www/lib/core.js` 含原生版本读取、SSE 接入、`blocked` 标记与 `diffFields`；\n  `native.js` 含 `__nativeEmit`；`AssetServer.java` 为线程池实现。\n- 服务端契约：`node tests/security.mjs` 27 项断言全过，其中时钟异常、rejected 处理路径与本版手机端配套。\n\n## 已知限制\n\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现，需 HMAC 或 TLS + 真机联调）。\n- 首次全量同步未分页（P2-25 未实现），记录数极大时首次同步偏慢。\n- AI 页已改为手机直连供应商，不再经电脑中转（`/api/ai/chat` 已下线）。",
+      "releaseName": "待办同步 安卓端 v2.9.1"
     }
   ],
   "counts": {
-    "total": 5,
-    "success": 1,
+    "total": 7,
+    "success": 2,
     "failed": 0,
-    "skipped": 4,
+    "skipped": 5,
     "unprocessed": 0
   },
   "failure": null,
@@ -113,6 +151,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T09:19:58.819Z",
-  "finishedAt": "2026-11-07T09:20:02.776Z"
+  "startedAt": "2026-11-07T10:14:33.027Z",
+  "finishedAt": "2026-11-07T10:14:38.045Z"
 }

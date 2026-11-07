@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-07T09:20:05.907Z",
+  "checkedAt": "2026-11-07T10:14:41.268Z",
   "counts": {
-    "total": 5,
-    "ok": 5,
+    "total": 7,
+    "ok": 7,
     "drift": 0,
     "warn": 0
   },
@@ -56,6 +56,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.0/com.zhou.todo-relay-2.2.0.zip",
       "tagCommit": "3597ed39b21eb4e1ed3cc539c3c0e6f5278e720b",
+      "issues": []
+    },
+    {
+      "id": "xhub-ext-2.2.1",
+      "version": "2.2.1",
+      "kind": "xhub-extension",
+      "tag": "xhub-ext-v2.2.1",
+      "file": "dist/com.zhou.todo-relay-2.2.1.zip",
+      "status": "ok",
+      "artifact": {
+        "bytes": 72522,
+        "sha256": "a6722bb91f418ec0ccfd722325146ddb13883ea044a2ffd3b917b381769307fc",
+        "commit": "6128c02b8833fa41ac75e00108150dd9d2752167",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/xhub-ext-v2.2.1",
+        "tag": "xhub-ext-v2.2.1",
+        "assets": [
+          "com.zhou.todo-relay-2.2.1.zip"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.1/com.zhou.todo-relay-2.2.1.zip",
+      "tagCommit": "6128c02b8833fa41ac75e00108150dd9d2752167",
       "issues": []
     },
     {
@@ -128,6 +152,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.0/todo-link-2.9.0.apk",
       "tagCommit": "37094963b8ecb89df5300f51d009bbaeffc26b8b",
+      "issues": []
+    },
+    {
+      "id": "android-apk-2.9.1",
+      "version": "2.9.1",
+      "kind": "android-apk",
+      "tag": "android-v2.9.1",
+      "file": "android/todo-link-2.9.1.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 187105,
+        "sha256": "e28c6ae60ec09fee5c290faa2b60fcd4738c2ff01c256ad226d1a0a9f4f2eb01",
+        "commit": "3aaea31b4fb0f2aa7ca60521b0e8b99fee62cadb",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v2.9.1",
+        "tag": "android-v2.9.1",
+        "assets": [
+          "todo-link-2.9.1.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.1/todo-link-2.9.1.apk",
+      "tagCommit": "3aaea31b4fb0f2aa7ca60521b0e8b99fee62cadb",
       "issues": []
     }
   ]
