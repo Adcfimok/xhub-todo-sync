@@ -7,12 +7,14 @@
     "xhub-ext-2.2.0",
     "xhub-ext-2.2.1",
     "xhub-ext-2.2.2",
+    "xhub-ext-2.2.3",
     "android-apk-2.7.0",
     "android-apk-2.8.0",
     "android-apk-2.9.0",
     "android-apk-2.9.1",
     "android-apk-2.9.2",
-    "android-apk-2.10.0"
+    "android-apk-2.10.0",
+    "android-apk-2.11.0"
   ],
   "results": [
     {
@@ -86,6 +88,24 @@
       "commit": "63e96dde3d5d191619567981c6027a2c71a71d30",
       "notes": "# 待办同步扩展 · x-hub v2.2.2\n\n在 2.2.1 基础上修一个**兼容性风险**：本机接口不再强制自定义请求头。\n\n## 为什么有这个版本\n\n2.2.1 为了防 CSRF，要求 `/api/local/*`、`/api/admin/*` 必须带 `X-Hub-Local: 1`。\n这个头由扩展页面自己加，但**它是经宿主 `service.request` 转发的，而宿主是否透传自定义头并不确定**。\n一旦宿主不透传，扩展页面所有请求都会被 403 打死，等于装上去就用不了。\n\n本版把判定改为只依赖浏览器强制写入、页面脚本无法伪造的两个头：\n\n| 判定依据 | 谁写的 | 能否被页面伪造 |\n| --- | --- | --- |\n| `Sec-Fetch-Site: cross-site` | 浏览器 | 否 |\n| `Origin` | 浏览器 | 否（脚本只能改 `referer` 之类，改不了 Origin） |\n\n同源页面请求不带 `Origin`、`Sec-Fetch-Site` 为 `same-origin`，直接放行——**是否透传自定义头都不影响**。\n跨站页面请求必然命中上面任一条，照样拒绝。防护强度不变，兼容面变大。\n\n自定义头仍然接受（带了不冲突），只是不再是必要条件。\n\n## 本版变更\n\n- **本机接口判定改为 `Sec-Fetch-Site` / `Origin`**：不再强制 `X-Hub-Local`，避免因宿主不透传头而导致整页 403。\n- **`/api/v1/diag` 同步调整**：跨站由 CORS 层直接拒绝（该接口含内网地址），同源可读，不再要求自定义头。\n- 其余与 2.2.1 完全一致（24 项审计修复不变）。\n\n## 从 2.2.1 升级\n\n覆盖解压即可。如果你在 2.2.1 上遇到「页面能显示但数据一直加载失败、状态栏报 403」，\n那正是本版修的问题，升级后即恢复。\n\n## 验证\n\n```bash\nnode run-all.mjs      # 端到端 41 通过 + 安全可靠性 28 通过\n```\n\n其中两条直接对应本版：\n\n- `同源请求无需自定义头即可访问` —— 模拟宿主不透传头的情况，必须 200\n- `跨站 Sec-Fetch-Site 被拒` —— 模拟恶意页面，必须 403\n\n## 已知限制\n\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现）。\n- 快照仍为全量拉取（P2-25 未实现）。",
       "releaseName": "待办同步扩展 · x-hub v2.2.2"
+    },
+    {
+      "id": "xhub-ext-2.2.3",
+      "version": "2.2.3",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-2.2.3.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 73175,
+      "sha256": "8e4cb176b0668ebd98f59384dc2fa3a1160dc3a59b1fd36d8342a3b9eda9428d",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.3/com.zhou.todo-relay-2.2.3.zip",
+      "uploadedAt": "2026-11-07T13:02:36.039Z",
+      "tag": "xhub-ext-v2.2.3",
+      "commit": "589170fc9db8a094ddc88c5eb5826598a4f720d3",
+      "notes": "# 扩展 2.2.3\n\n只做一件事：让待办的「提醒提前量」能跨设备同步。\n\n## 改动\n\n- `service/store.js` 的 `todos` 归一化新增 `remindLead`：`-1` 关闭、`0` 准时、正数 = 提前分钟；`>525600`（一年）按一年钳制。\n- 同一处 `fromHostRow` 增加 `remindLead` / `remind_lead` 的读取，PC 端行导入不会把它丢掉。\n- `remindAt`（绝对时刻）沿用 2.2.2 的字段，两字段配合：预设走 `remindLead`，自定义时刻走 `remindAt`。\n\n## 为什么不能只存在手机本地\n\n提醒设置属于用户数据，重装或换机后要能恢复；只在本地存 `remindLead`，一旦重新配对就会被服务端归一化掉，用户会看到「提醒设置莫名消失」。\n\n## 兼容性\n\n- 老版本扩展不认这个字段会丢弃它，但不会报错；手机端仍按本地记录提醒。\n- 反向兼容：没有 `remindLead` 的老记录，手机端继续按「提前 15 分钟」处理。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/e2e.mjs        # 41 项\nnode tests/security.mjs   # 28 项\nnode --experimental-default-type=module --test android/tests/remind.test.mjs   # 含服务端字段保留断言\n```\n\n## 产物\n\n- `com.zhou.todo-relay-2.2.3.zip`，73,175 字节，14 个文件\n- SHA-256 `8e4cb176b0668ebd98f59384dc2fa3a1160dc3a59b1fd36d8342a3b9eda9428d`",
+      "releaseName": "待办同步扩展 · x-hub v2.2.3"
     },
     {
       "id": "android-apk-2.7.0",
@@ -184,23 +204,41 @@
       "file": "android/todo-link-2.10.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 191201,
       "sha256": "fce0680890ef72aae5bab3fc33ffb4361a3e79702cdcce3b29cc35ccba1761de",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.10.0/todo-link-2.10.0.apk",
-      "uploadedAt": "2026-11-07T12:10:59.436Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.10.0",
       "commit": "7fa8e385143aeb7ffdf864a856f2c84378410059",
       "notes": "# 待办同步 · 安卓端 v2.10.0\n\n导航改版：底栏从 6 格收成 5 格，笔记搬到「我的」与首页，加号改成先选类型；底栏高亮块加入放大与彩虹色散动效。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 16 |\n| versionName | 2.10.0 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `fce0680890ef72aae5bab3fc33ffb4361a3e79702cdcce3b29cc35ccba1761de` |\n| 大小 | 191,201 字节 |\n\n## 本版变更\n\n### 1. 底栏收成 5 格\n\n`首页 / 待办 / ＋ / AI / 我的`。笔记不再占底栏格子，但功能没少——它变成了二级页，入口挪到三处。\n\n改的时候同步改了四个常量（`SLOT_ROUTE`、`TAB_SLOTS`、`VALID_SLOTS`、`TAB_OF`）和两处样式（网格列数、高亮块宽度）。高亮块的位移仍按「第几格 × 自身宽度」算，所以格数变了不用改公式，但**必须实测**——这类改动最容易出的问题就是高亮块压在格子缝上。\n\n### 2. 笔记的三处入口\n\n| 入口 | 位置 |\n| --- | --- |\n| 「我的」菜单第一项 | 带条目数量角标 |\n| 首页统计格「笔记」 | 四宫格第二个 |\n| 首页「最近笔记」卡片 | 每一行可点，「全部」按钮也进得去 |\n\n笔记现在按二级页处理：返回键回到进来时的页面（从首页进就回首页，从「我的」进就回「我的」），底栏高亮也跟着来源走。以前它是底栏页，这段逻辑不存在，不补的话从「我的」进去按返回会直接跳回首页。\n\n### 3. 加号改成先选类型\n\n点＋弹出「待办 / 笔记 / 提示词」三项，选完再进对应表单。这是笔记移出底栏后的必要路径——否则新建笔记只能从「我的」逐层点进去。\n\n页面自己有新建语义时仍然优先：在待办页点＋直接建待办，在日历页点＋按选中的那天建待办，不会弹选择器。\n\n### 4. 底栏动效\n\n参考给的示例视频（酷安底栏）做的，三件事：\n\n- **拖动放大**：高亮块跟着手指移动时按拖动进度放大，拖满一格到 1.15 倍，松手回落到原尺寸。块本身也从圆角矩形变成更接近圆形（`border-radius` 过渡到 46%）。\n- **边缘彩虹色散**：拖动时高亮块边缘浮出一圈 conic 渐变（橙→黄→绿→青→蓝→紫），`blur(9px)` 柔化，中心用 radial mask 挖空——只留一圈光，不把整块染成彩色。拖得越远越明显，静止时完全不可见。\n- **切页脉冲**：点按切换页面时，高亮块先快速鼓起（0.14 秒到 1.14 倍）再慢慢收回（0.24 秒），色散同步闪一次。\n\n实现上把位移和缩放拆成两层：外层 `.tab-indicator` 只做 `translateX`，内层 `<i>` 只做 `scale`。两层各管一个 `transform`，互不覆盖，也不依赖 `scale`/`translate` 这类较新的独立变换属性，老 WebView 上降级只丢动效、不丢布局。\n\n系统开启「减弱动态效果」时，以上动效全部关闭。\n\n## 验证\n\n新增 `_tools/nav-v5-check.mjs`，3 个视口 × 2 个主题 × 21 项断言：\n\n| 检查组 | 断言 |\n| --- | --- |\n| 结构 | 4 个页面格、5 列网格、无 notes 格、加号存在 |\n| 对齐 | 逐个切到 待办/AI/我的/首页，高亮块中心与格子中心偏差 ≤2px；块宽 = 1/5 栏宽 |\n| 动效 | 静止 scale=1；拖 50% 得 1.075；拖满 1.15；切页 1.14；色散 conic 存在；静止 opacity=0；切页 opacity>0.5 |\n| 入口 | 三处均能进入 `#/notes`；从「我的」进笔记后返回回「我的」 |\n| 类型面板 | 弹出可见、三项齐全、不盖底栏、选完自动收起并打开「新建笔记」 |\n\n实测结果：**三个视口的高亮块中心偏差全部为 0px**（不是\"在容差内\"，是完全重合），21 项断言全过。\n\n另跑 `navbar-check.mjs`（底栏离屏幕距离、内容不被遮、AI 输入区位置）5 个视口全过，说明改格数没有破坏 2.9.0 建立的悬浮几何。\n\n```\nnode _tools/nav-v5-check.mjs            # 浅色\nnode _tools/nav-v5-check.mjs --dark     # 深色\nnode _tools/navbar-check.mjs            # 几何回归\n```\n\n## 升级说明\n\n与 2.9.x 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**，不需要重新配对。\n\n底栏少了一个格子，如果之前习惯从底栏进笔记：现在走「我的 → 笔记」，或首页的「笔记」统计格 / 「最近笔记 → 全部」。\n\n## 已知限制\n\n- 类型选择器只放待办 / 笔记 / 提示词三项。速达与便签偏配置、不常新建，仍从「我的」进。\n- 色散在浅色主题下比深色主题淡（白色背景上彩光对比度天然更低），这是配色结果，不是渲染差异。\n- 其余七项（提醒时间、番茄钟自定义、强提醒、节日模块、首页时钟、增删入口改造）随 3.0.0 一起，见 `docs/11`。",
       "releaseName": "待办同步 安卓端 v2.10.0"
+    },
+    {
+      "id": "android-apk-2.11.0",
+      "version": "2.11.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.11.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 220370,
+      "sha256": "cb7bb2472d49e7499175c1d5aaa9f84a193d21c511b2cceb1c8d9a5c30cc96ca",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.11.0/todo-link-2.11.0.apk",
+      "uploadedAt": "2026-11-07T13:02:39.390Z",
+      "tag": "android-v2.11.0",
+      "commit": "da16e8285f95db2a0b7b367d3534af36c9a53320",
+      "notes": "# 安卓端 2.11.0（versionCode 17）\n\n本版一次性落地八项功能需求，并按 `docs/12` 修掉「多工具调用中断」。\n\n## 底栏交互\n\n- **移除拖动时的炫彩光效**：删掉高亮块 `::before` 的 `conic-gradient` 与模糊遮罩，只保留跟手放大（拖动 0→15%，切页脉冲 1.14 倍）与轻微趋圆。\n- 位移与缩放仍是两层 transform，老 WebView 降级只丢动效、不丢布局。\n\n## 待办提醒时间\n\n- 新建/编辑待办新增「提醒时间」预设：不提醒 / 准时 / 提前 15 分钟 / 30 分钟 / 1 小时 / 1 天 / 3 天 / 7 天 / 自定义（`datetime-local`）。\n- 记录写入 `remindLead`（-1 关闭、0 准时、正数=提前分钟）与 `remindAt`（绝对时刻）。服务端 `todos` 白名单同步新增 `remindLead`，PC 端可读、跨设备一致。\n- 没有截止日期时选「提前」会明确降级为不提醒并提示，不会静默存一条永远不响的记录。\n- 待办行显示 `⏰ 提前 1 天` 之类标记；老记录无提醒字段时仍按历史的「提前 15 分钟」执行。\n\n## 强提醒（通知 + 震动 + 弹窗 + 系统闹钟）\n\n- 新增高优先级渠道「强提醒（闹钟）」，与普通「待办提醒」分开，可单独静音。\n- 前台：应用内弹窗（稍后 10 分钟 / 标记完成），队列最多 3 条，避免批量提醒叠面板。\n- 后台/息屏：`AlarmManager` 精确闹钟 + `AlarmReceiver` 发通知并震动；未授予精确闹钟权限时退化为 `setAndAllowWhileIdle`，宁可晚几分钟也不静默不响。\n- 只排未来最近的 3 条，固定 requestCode 覆盖式调度，不会越积越多。\n\n## 笔记 / 速达 / 提示词\n\n- 三页都补了页面内「＋ 新建」按钮（笔记已移出底栏，不能只靠底部加号）。\n- 速达的编辑入口从 `oncontextmenu`（Android WebView 不派发）改为卡片右上角「⋯」，表单内可删除。\n- 提示词卡片补「编辑」按钮，并修掉缺少 `writeClipboard` 导入导致复制直接抛错的问题。\n\n## 番茄钟自定义\n\n- 专注 1–180 分钟、休息 1–60 分钟可调，存 `meta.pomoCfg`。\n- 正在计时时修改会询问「按新时长重新开始 / 下一轮生效」，不会悄悄重置用户当前这一轮。\n- 到点提醒、下一轮时长、说明文案全部跟随配置。\n\n## 节日模块\n\n- 新增页面：传统节日（12 个，农历换算）、二十四节气（24 个）、外国节日（9 个，含按周次计算的感恩节/母亲节/父亲节与复活节）。\n- 农历换算移植自 x-hub 桌面端 `src/utils/lunar.ts` 的 1900–2100 位编码表；节气用世纪常数公式，页脚注明可能差 1 天。\n- 每条可「＋ 待办」：到期日 09:00、提前 1 天提醒；同一天同一节日不会重复添加。\n\n## 首页\n\n- **秒级时钟**：`HH:MM:SS`，用 `1005 - Date.now() % 1000` 对齐整秒，只改文本节点，不整页重渲染。\n- **每日一句**：内置 24 条本地语料（与桌面端 `quotes.ts` 同一批），按日期取一条、点击换下一条且不重复、支持自定义覆盖；渐变文字 + 出处。\n- **可自定义卡片**：4 列网格，卡片可拖动位置、拖右下角改大小、卡片库增删、一键恢复默认；增删后自动向上压实，不留大片空洞。\n- 卡片库把扩展同步的五个集合（todos/notes/stickies/resources/snippets）都列为可选卡片，并标注「来自扩展」。\n\n## AI 助手\n\n- 按 `docs/12`：`runAgent` 的循环从刚 push 的 `tool` 消息取 `tool_call_id`，一轮两个以上工具调用时第二轮必崩（`Cannot read properties of undefined (reading '1')`）。改为从局部 `assistantMsg` 取。\n- 顺带加固三类畸形响应：`tool_calls` 数组含 `null` 项、整包 `null`、只有 `usage` 的尾包。\n\n## 验证\n\n```\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 34 项\nnode _tools/home-check.mjs            # 56 项：时钟/名言/布局/节日/强提醒\nnode _tools/nav-v5-check.mjs          # 底栏 5 格与无光效断言\nnode _tools/navbar-check.mjs          # 5 视口悬浮几何\ncd extensions/todo-relay && node tests/e2e.mjs && node tests/security.mjs\n```\n\n## 产物\n\n- `todo-link-2.11.0.apk`，220,370 字节\n- SHA-256 `cb7bb2472d49e7499175c1d5aaa9f84a193d21c511b2cceb1c8d9a5c30cc96ca`\n- 签名证书 SHA-256 `0be758eb…620ab`（与 2.9.x / 2.10.0 一致，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.11.0"
     }
   ],
   "counts": {
-    "total": 10,
-    "success": 1,
+    "total": 12,
+    "success": 2,
     "failed": 0,
-    "skipped": 9,
+    "skipped": 10,
     "unprocessed": 0
   },
   "failure": null,
@@ -208,6 +246,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T12:10:54.875Z",
-  "finishedAt": "2026-11-07T12:10:59.436Z"
+  "startedAt": "2026-11-07T13:02:33.024Z",
+  "finishedAt": "2026-11-07T13:02:39.391Z"
 }
