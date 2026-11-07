@@ -10,7 +10,8 @@
     "android-apk-2.7.0",
     "android-apk-2.8.0",
     "android-apk-2.9.0",
-    "android-apk-2.9.1"
+    "android-apk-2.9.1",
+    "android-apk-2.9.2"
   ],
   "results": [
     {
@@ -74,12 +75,12 @@
       "file": "dist/com.zhou.todo-relay-2.2.2.zip",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 73051,
       "sha256": "760dba2648d79b9cfe8e9bfdab39b59e590f51681dd297ef63e22a4422a8d5de",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.2/com.zhou.todo-relay-2.2.2.zip",
-      "uploadedAt": "2026-11-07T10:35:04.813Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "xhub-ext-v2.2.2",
       "commit": "63e96dde3d5d191619567981c6027a2c71a71d30",
       "notes": "# 待办同步扩展 · x-hub v2.2.2\n\n在 2.2.1 基础上修一个**兼容性风险**：本机接口不再强制自定义请求头。\n\n## 为什么有这个版本\n\n2.2.1 为了防 CSRF，要求 `/api/local/*`、`/api/admin/*` 必须带 `X-Hub-Local: 1`。\n这个头由扩展页面自己加，但**它是经宿主 `service.request` 转发的，而宿主是否透传自定义头并不确定**。\n一旦宿主不透传，扩展页面所有请求都会被 403 打死，等于装上去就用不了。\n\n本版把判定改为只依赖浏览器强制写入、页面脚本无法伪造的两个头：\n\n| 判定依据 | 谁写的 | 能否被页面伪造 |\n| --- | --- | --- |\n| `Sec-Fetch-Site: cross-site` | 浏览器 | 否 |\n| `Origin` | 浏览器 | 否（脚本只能改 `referer` 之类，改不了 Origin） |\n\n同源页面请求不带 `Origin`、`Sec-Fetch-Site` 为 `same-origin`，直接放行——**是否透传自定义头都不影响**。\n跨站页面请求必然命中上面任一条，照样拒绝。防护强度不变，兼容面变大。\n\n自定义头仍然接受（带了不冲突），只是不再是必要条件。\n\n## 本版变更\n\n- **本机接口判定改为 `Sec-Fetch-Site` / `Origin`**：不再强制 `X-Hub-Local`，避免因宿主不透传头而导致整页 403。\n- **`/api/v1/diag` 同步调整**：跨站由 CORS 层直接拒绝（该接口含内网地址），同源可读，不再要求自定义头。\n- 其余与 2.2.1 完全一致（24 项审计修复不变）。\n\n## 从 2.2.1 升级\n\n覆盖解压即可。如果你在 2.2.1 上遇到「页面能显示但数据一直加载失败、状态栏报 403」，\n那正是本版修的问题，升级后即恢复。\n\n## 验证\n\n```bash\nnode run-all.mjs      # 端到端 41 通过 + 安全可靠性 28 通过\n```\n\n其中两条直接对应本版：\n\n- `同源请求无需自定义头即可访问` —— 模拟宿主不透传头的情况，必须 200\n- `跨站 Sec-Fetch-Site 被拒` —— 模拟恶意页面，必须 403\n\n## 已知限制\n\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现）。\n- 快照仍为全量拉取（P2-25 未实现）。",
@@ -156,13 +157,31 @@
       "commit": "3aaea31b4fb0f2aa7ca60521b0e8b99fee62cadb",
       "notes": "# 待办同步 · 安卓端 v2.9.1\n\n安全与可靠性审计修复版的手机端：版本号不再写死、同步改为实时推送、被拒绝的修改不再静默丢失。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 14 |\n| versionName | 2.9.1 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `e28c6ae60ec09fee5c290faa2b60fcd4738c2ff01c256ad226d1a0a9f4f2eb01` |\n\n## 本版变更\n\n- **版本号读真实包信息**（P2-21）：原生 `appVersion()` 以前写死 `\"2.7.0\"`，APK 已经是 2.9.x 却仍上报旧版本。\n  现在改读 `PackageManager.getPackageInfo(...).versionName`，前端优先用原生值，取不到才回退构建常量。\n- **同步改为 SSE 推送**（P1-14）：之前只靠 30 秒定时器，PC 上改完待办，手机最长半分钟后才变。\n  现在连 `/api/v1/stream`，改动基本即时到达；SSE 正常时兜底轮询放宽到 120 秒，省电。\n- **被拒绝的修改不再静默丢失**（P0-4）：以前服务端返回 `rejected` 时手机端直接清 `dirty`，\n  这条改动既不重试、也等不到远端覆盖，永远悬空。现在记进冲突表并标 `blocked`，让胜出版本落地，同时保留本地原值可查。\n- **冲突能说清字段**（P1-9）：补 `diffFields()`，冲突详情会列出具体是哪几个字段（标题 / 截止 / 备注…）不一致，\n  而不是只显示「有冲突」。\n- **原生回调收敛为单入口**（P2-24）：`evaluateJavascript` 不再把多段数据拼进 JS 源码，\n  改为 `__nativeEmit(fn, json)`，参数一律 JSON 序列化后由页面侧解析。\n- **静态资源服务并发化**（P1-17）：`AssetServer` 从单线程串行改为 4 线程池，\n  页面加载时并发拉取多个 js/css 不再互相排队，冷启动白屏时间下降。\n\n## 升级说明\n\n与 2.9.0 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**（见 `docs/06`）。\n不需要重新配对。\n\n## 安装\n\n1. 下载 `todo-link-2.9.1.apk`，允许「安装未知来源应用」。\n2. 覆盖安装即可；首次打开若提示版本变化属正常。\n3. 打开「我的 → 同步与设置」，确认状态为「已连接」；配对信息无需重填。\n\n## 验收记录\n\n- 构建：`aapt dump badging` 返回 `versionCode='14' versionName='2.9.1'`。\n- 签名：SHA-256 `0be758eb…` 与 2.9.0 一致，可覆盖安装。\n- 包内确认：`assets/www/lib/core.js` 含原生版本读取、SSE 接入、`blocked` 标记与 `diffFields`；\n  `native.js` 含 `__nativeEmit`；`AssetServer.java` 为线程池实现。\n- 服务端契约：`node tests/security.mjs` 27 项断言全过，其中时钟异常、rejected 处理路径与本版手机端配套。\n\n## 已知限制\n\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现，需 HMAC 或 TLS + 真机联调）。\n- 首次全量同步未分页（P2-25 未实现），记录数极大时首次同步偏慢。\n- AI 页已改为手机直连供应商，不再经电脑中转（`/api/ai/chat` 已下线）。",
       "releaseName": "待办同步 安卓端 v2.9.1"
+    },
+    {
+      "id": "android-apk-2.9.2",
+      "version": "2.9.2",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.9.2.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 191201,
+      "sha256": "fc2115fcc5f6958307ddb587387cb73b7a57c41250c4390edfcc6660e3f205a3",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.9.2/todo-link-2.9.2.apk",
+      "uploadedAt": "2026-11-07T11:36:41.987Z",
+      "tag": "android-v2.9.2",
+      "commit": "81fc5524d53a884296f424cebff34d7e81cc9662",
+      "notes": "# 待办同步 · 安卓端 v2.9.2\n\n修复版：AI 助手终于能真正建待办了。\n\n## 基本信息\n\n| 项目 | 值 |\n| --- | --- |\n| 包名 | `com.zhou.todolink` |\n| versionCode | 15 |\n| versionName | 2.9.2 |\n| minSdk | 24（Android 7.0） |\n| 签名证书 SHA-256 | `0be758ebaf99867489bd830e7516392a7bbdd99a3ac46e9bbd97fdd5ba0620ab` |\n| APK SHA-256 | `fc2115fcc5f6958307ddb587387cb73b7a57c41250c4390edfcc6660e3f205a3` |\n| 大小 | 191,201 字节 |\n\n## 本版变更\n\n只有一项：**修复 AI 助手「只聊天、不建待办」**。\n\n先说现象：手机上对助手说「明天下午三点提醒我交房租」，它回一段话，但待办列表里什么都没有；换成电脑端同一个模型、同一句话，待办能正常建出来。\n\n原因不在模型，在手机端的流式解析。\n\n手机端 AI 的响应是 `lib/agent.js` 自己解析的（桌面端走 Rust 侧实现，是另一套代码，所以同场景正常）。这段解析原来有三处硬伤：\n\n1. 只按 `\\n\\n` 切分事件。经 Cloudflare 或多数中转网关后，分隔符会变成 `\\r\\n\\r\\n`，于是一条都切不开。\n2. 一个事件里只取第一行 `data:`。SSE 规范允许续行，多行时参数被截断。\n3. 流结束时把残留 buffer 直接丢掉。很多中转的最后一条事件不带结尾空行，最后那个 `tool_calls` 就没了。\n\n后果是同一条链：**解析不出事件 → 工具调用列表恒为空 → agent 循环第一轮就返回 → 模型收不到工具结果，界面只显示一句聊天**。用户看到的就是「AI 说它记住了，其实什么都没发生」。\n\n修复内容：\n\n- 抽出 `parseSseBlock()`：多行 `data:` 按 `\\n` 拼接；`delta`（流式分片）与 `message`（非流式整包）走同一出口，避免两套代码漂移。\n- 抽出 `createSseParser()`：先做 `\\r\\n → \\n` 归一化再切分，流结束时 `flush()` 把残留当事件处理。\n- 上游忽略 `stream`、直接回完整 JSON 时，按非流式对象解析一次。\n- 拿到字节却什么也没解析出来时，明确报「响应格式无法识别」，不再静默返回空内容。\n\n## 验证\n\n新增 `android/tests/ai-parse.test.mjs`，18 项断言，覆盖 7 种真实分帧形态：\n\n| 形态 | 修复前 | 修复后 |\n| --- | --- | --- |\n| 官方 `\\n\\n`、参数分两片 | 通过 | 通过 |\n| 中转 `\\r\\n\\r\\n` | **失败（残留 160 字节）** | 通过 |\n| 唯一一条事件、结尾无空行 | **失败** | 通过 |\n| 中转忽略 `stream`、回完整 JSON | **失败** | 通过 |\n| `tool` 事件有空行、`[DONE]` 没有 | 通过 | 通过 |\n| 事件被 TCP 切成两半 | 通过 | 通过 |\n| 同一事件内多行 `data:` | **失败** | 通过 |\n\n```\nnode --experimental-default-type=module --test android/tests/ai-parse.test.mjs\n# tests 18 / pass 18 / fail 0\n```\n\n`_tools/sse-parse-probe.mjs` 保留了修复前的逻辑复刻，可复跑对比（legacy 4/7 失败，现实现 7/7 通过）。\n\n## 升级说明\n\n与 2.9.0 / 2.9.1 同一签名证书，**可直接覆盖安装，本地数据、配对令牌与登录态保留**。不需要重新配对，AI 的接口地址与 Key 也不用重填。\n\n## 安装\n\n1. 下载 `todo-link-2.9.2.apk`，允许「安装未知来源应用」。\n2. 覆盖安装。\n3. 打开 AI 页，说一句「明天下午三点交房租」，确认待办列表出现该条。\n\n## 已知限制\n\n- 若当前模型本身不支持函数调用（如部分推理模型），仍不会建待办——这类模型会明确报错，不会假装成功。换 `deepseek-chat` / `gpt-4o-mini` 一类支持 tools 的模型即可。\n- 局域网内仍为明文 HTTP，令牌无过期机制（P1-18 未实现）。\n- 番茄钟仍是固定 25/5 分钟，自定义时长与提醒时间设置随 3.0.0 一起做（见 `docs/11`）。",
+      "releaseName": "待办同步 安卓端 v2.9.2"
     }
   ],
   "counts": {
-    "total": 8,
+    "total": 9,
     "success": 1,
     "failed": 0,
-    "skipped": 7,
+    "skipped": 8,
     "unprocessed": 0
   },
   "failure": null,
@@ -170,6 +189,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T10:35:01.719Z",
-  "finishedAt": "2026-11-07T10:35:05.396Z"
+  "startedAt": "2026-11-07T11:36:37.854Z",
+  "finishedAt": "2026-11-07T11:36:41.987Z"
 }
