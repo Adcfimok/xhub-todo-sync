@@ -16,7 +16,8 @@
     "android-apk-2.10.0",
     "android-apk-2.11.0",
     "android-apk-2.11.1",
-    "android-apk-2.12.0"
+    "android-apk-2.12.0",
+    "android-apk-2.12.1"
   ],
   "results": [
     {
@@ -270,11 +271,29 @@
       "commit": "baf949501ee944bfb5f6b97b2ec5b1aa9a55d883",
       "notes": "# 安卓端 2.12.0（versionCode 19）\n\n三处界面调整：首页首屏时间与问好合到一行、四个统计数字各自独立成卡（与「每日一句」同宽同高）、「我的 → 节日」新增「一键添加所有节日」。\n\n## 改了什么\n\n| 位置 | 之前 | 现在 |\n| --- | --- | --- |\n| 首页首屏 | 大号时钟一行、问好另起一行（26px 独占一行，占掉约 40px 高度） | 同一行：时钟 38px + 问好 18px，按基线对齐，问好降到次要层级；跨过 6/11/14/18 点时问好随时钟一起变，不用等整页重渲染 |\n| 首页统计 | 一张 4×2 的「统计」卡，里面挤四个 1 列宽的小格（约 74×62px） | 拆成四张 4×1 卡片：待办 / 笔记 / 速达 / 提示词，每张与「每日一句」完全同宽同高（几何实测 326×78 @390 宽 / 366×78 @430 宽），整卡可点直达对应页面 |\n| 我的 → 节日 | 只有一条进入节日页的入口，节日待办要一个个点 | 条目下方新增「一键添加所有节日」开关：一次把未来 13 个月的 54 个节日写成待办（早上 9 点到期、提前 1 天提醒），可一键撤回 |\n\n## 细节\n\n- **统计卡拆分**：卡片库从 10 项变 13 项；老版本存下的「统计」卡会在读取布局时自动拆成四张，日历等后续卡片顺延，不会出现「升级后统计消失」。迁移是幂等的，重复读写不会多出卡片。\n- **整卡可点**：统计卡整张是点击区（`role=button` + 键盘 Enter/Space），编辑态下点击不跳页，避免拖拽误触。\n- **批量添加**：同名同一天的待办只认一条，重复勾选不会堆重复项；取消勾选只删这一批自己建的、且还没做完的（已完成的当历史留着），删前弹确认。\n- **空态文案**：待办卡副标题按「今天到期 N 件 / 今天完成 N 件 / 今天没有到期的」自动切换。\n\n## 验证\n\n```\nnode _tools/home-check.mjs                                              # 75 项（新增：几何一致、同一行、批量开关全流程）\nnode _tools/nav-v5-check.mjs                                            # 底栏 + 三处笔记入口\nnode _tools/navbar-check.mjs                                            # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs # 41 项（新增 home-layout 7 项）\nnode extensions/todo-relay/tests/e2e.mjs                                # 41 项\nnode extensions/todo-relay/tests/security.mjs                           # 28 项\n```\n\n关键断言：四张统计卡的 `getBoundingClientRect()` 与「每日一句」宽高差 < 1px；时钟与问好水平相邻且垂直重叠；开关勾选后待办数 0 → 54、取消并确认后回到 0。\n\n截图人工核对（浅色 / 暗色 / 360·390·430 三档）：`_tools/home-*-light.png`、`_tools/home-more-bulk-light.png`。\n\n## 产物\n\n- `todo-link-2.12.0.apk`，224,466 字节\n- SHA-256 `44a643b85d2276ac625b6ac4d7c11d407804b650ef19307261a6e9b632595980`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.12.0"
+    },
+    {
+      "id": "android-apk-2.12.1",
+      "version": "2.12.1",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.12.1.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 224466,
+      "sha256": "2a97e26d9b52e49085f3958c1f4fdf32b8a5ee55a87a651c6c3061bc1755b94e",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.1/todo-link-2.12.1.apk",
+      "uploadedAt": "2026-11-07T14:52:39.779Z",
+      "tag": "android-v2.12.1",
+      "commit": "7ec229aa99f0417d76f959bd7d53e6c8405a9dd7",
+      "notes": "# 安卓端 2.12.1（versionCode 20）\n\n按反馈回退 2.12.0 的卡片改动：统计恢复成一张 4×2 卡片里的四宫格，其余两项（时间与问好同行、节日一键添加）保留。\n\n## 改了什么\n\n| 位置 | 2.12.0 | 2.12.1 |\n| --- | --- | --- |\n| 首页统计 | 拆成四张 4×1 卡片，纵向占 4 行（约 342px） | 回退为一张 4×2「统计」卡，四个数字横向排一行，底部仍是「今天完成 N 件 · 已全部同步」 |\n| 整卡点击 | 统计卡整张可点 | 恢复成四宫格里的小按钮，各自跳转 |\n| 卡片库 | 10 → 13 项 | 回到 10 项，与 2.11.1 一致 |\n\n保留未动：\n\n- **时间与问好同一行**（2.12.0 新增）：时钟 38px + 问好 18px 基线对齐，跨时段自动更新。\n- **我的 → 节日 → 一键添加所有节日**（2.12.0 新增）：批量写待办 / 一键撤回。\n\n## 升级说明\n\n- 已经装过 2.12.0 的机器，本地存的是四张统计卡的布局。2.12.1 读取时会自动合并回一张「统计」卡，落在第一张统计卡原来的位置，日历等卡片顺延，不会出现「统计整块消失」或空洞。\n- 只删过其中一两张统计卡的，也会按剩下的合并成一张，不会重复。\n- 合并是幂等的：再次读写不会多卡；`android/tests/home-layout.test.mjs` 覆盖了这几种情况。\n\n## 验证\n\n```\nnode _tools/home-check.mjs                                              # 75 项（统计卡断言改为「单张四宫格 + 无 stat:* 残留」）\nnode _tools/nav-v5-check.mjs                                            # 底栏 + 三处笔记入口（统计格按钮）\nnode _tools/navbar-check.mjs                                            # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs # 42 项（home-layout 8 项：合并迁移/幂等/minH/增删）\n```\n\n首页截图（360/390/430，浅色 + 暗色）与 2.11.1 的统计卡逐像素一致，仅首屏时间行不同。\n\n## 产物\n\n- `todo-link-2.12.1.apk`，224,466 字节\n- SHA-256 `2a97e26d9b52e49085f3958c1f4fdf32b8a5ee55a87a651c6c3061bc1755b94e`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.12.1"
     }
   ],
   "counts": {
-    "total": 14,
-    "success": 0,
+    "total": 15,
+    "success": 1,
     "failed": 0,
     "skipped": 14,
     "unprocessed": 0
@@ -284,6 +303,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T14:37:30.995Z",
-  "finishedAt": "2026-11-07T14:37:34.483Z"
+  "startedAt": "2026-11-07T14:52:34.685Z",
+  "finishedAt": "2026-11-07T14:52:39.779Z"
 }
