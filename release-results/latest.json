@@ -18,7 +18,8 @@
     "android-apk-2.11.1",
     "android-apk-2.12.0",
     "android-apk-2.12.1",
-    "android-apk-2.12.2"
+    "android-apk-2.12.2",
+    "android-apk-2.12.3"
   ],
   "results": [
     {
@@ -298,23 +299,41 @@
       "file": "android/todo-link-2.12.2.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 224466,
       "sha256": "528b378a1d3f762f48ce0852b5439c25c275314200bf4089e6278f024b551adc",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.2/todo-link-2.12.2.apk",
-      "uploadedAt": "2026-11-07T15:10:13.505Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.12.2",
       "commit": "6d70497344718bd348f2c3b8632286945161a138",
       "notes": "# 安卓端 2.12.2（versionCode 21）\n\n统计卡改成和「每日一句」同尺寸：同为 4 列 × 1 行，上下沿对齐、宽高一致；四个统计数字一个不少，全部完整显示。\n\n## 改了什么\n\n| 项 | 2.12.1 | 2.12.2 |\n| --- | --- | --- |\n| 统计卡尺寸 | 4×2（326×166 @390） | 4×1（326×78 @390），与「每日一句」逐像素一致 |\n| 四个数字 | 竖排大格（数字 19px + 标签 11px，格高约 62px） | 横排紧凑格（数字 18px + 标签 10.5px，格高 48px），一个都不少 |\n| 卡片脚注 | 「今天完成 N 件 · 已全部同步」占一行 | 挪到卡片头右侧小字「今天完成 N 件」，不再占正文高度 |\n| 卡片库 | 10 项 | 不变 |\n\n四格之所以在 78px 内放得下：卡片内边距收到 `2px 10px 5px`、格子内边距 4px、数字 18px/1.05、标签 10.5px/1.15，实测内容高 41px，可用 48px，留 7px 余量。\n\n## 老布局升级\n\n- 存过 2.11.x/2.12.1 布局的机器，统计卡是 2 行：载入时按「正好 2 行」收成 1 行，并回写为布局 v2，只算一次。\n- 自己把统计卡拉到 3 行以上的不动。\n- 装过 2.12.0（四张统计卡）的，先合并成一张再收成 1 行，日历等卡片顺延。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 78 项：新增「统计卡与每日一句同宽同高」「四个统计格完整不裁切」\nnode _tools/nav-v5-check.mjs    # 底栏 + 三处笔记入口\nnode _tools/navbar-check.mjs    # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 44 项\n```\n\n三档视口实测：360 → 统计 296×78 / 名言 296×78；390 → 326×78 / 326×78；430 → 366×78 / 366×78。\n裁切判定不是看截图，而是逐个格子比对「数字与标签的矩形是否落在格子内 + 格子有没有滚动溢出」，四格全部 ok；320 窄屏与手动缩到 3 列也复测过。\n\n## 产物\n\n- `todo-link-2.12.2.apk`，224,466 字节\n- SHA-256 `528b378a1d3f762f48ce0852b5439c25c275314200bf4089e6278f024b551adc`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.12.2"
+    },
+    {
+      "id": "android-apk-2.12.3",
+      "version": "2.12.3",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.12.3.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 224466,
+      "sha256": "13b1c0b5c4376cc4c2221aae3618bfebaf948124dbd70c5b7a525dacacde70d4",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.3/todo-link-2.12.3.apk",
+      "uploadedAt": "2026-11-07T15:37:04.546Z",
+      "tag": "android-v2.12.3",
+      "commit": "335112d014fbc316ffaf343536ad6b6b04243875",
+      "notes": "# 安卓端 2.12.3（versionCode 22）\n\n修 2.12.2 升级后「统计卡与日历之间空一整行」的问题：统计卡收高后，下面的卡片没有跟着上移，首页中间留下约 88px 的空白。\n\n## 原因\n\n2.12.2 把统计卡从 2 行改成 1 行，升级时只改了统计卡自己的高度，下面各卡的 `y` 还是老坐标：\n\n```\n升级前：quote y0 · stats y1–y2 · calendar y3 …\n升级后：quote y0 · stats y1 · calendar y3 …   ← y2 空了整整一行\n```\n\n## 修法\n\n- 升级流程加一步「向上压实」：所有卡片按 `y`、`x` 排序后依次往上推，推不动为止。只会上移，不会横向移动、不会下移，卡片之间的上下顺序不变。\n- 布局版本 `LAYOUT_V` 2 → 3。装过 2.12.2 的机器（存档里已经是 v2、带空行）这次也会走一遍压实，不需要清除数据。\n- `compact()`（删卡/加卡时用的压实）改成复用同一个 `pullUp()`，避免两套压实现日后跑偏。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 85 项：新增「卡片之间没有空行」×3 视口 + 老布局升级 4 项\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 46 项（home-layout 12 项）\n```\n\n新增的回归点是拿 2.12.2 真实写回的存档复现的：\n\n- 塞一份 `v2` 布局（统计 y1、日历 y3）→ 载入后日历 `y=2`，统计卡与日历间距实测 **10px**（就是网格标准间距）\n- 载入后自动回写为 `v3`，且回写的坐标已经是压实后的\n- 三档视口都断言「每张卡正上方必须有邻居」，杜绝任何形式的空行\n\n## 产物\n\n- `todo-link-2.12.3.apk`，224,466 字节\n- SHA-256 `13b1c0b5c4376cc4c2221aae3618bfebaf948124dbd70c5b7a525dacacde70d4`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.12.3"
     }
   ],
   "counts": {
-    "total": 16,
+    "total": 17,
     "success": 1,
     "failed": 0,
-    "skipped": 15,
+    "skipped": 16,
     "unprocessed": 0
   },
   "failure": null,
@@ -322,6 +341,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T15:10:06.967Z",
-  "finishedAt": "2026-11-07T15:10:13.505Z"
+  "startedAt": "2026-11-07T15:36:58.811Z",
+  "finishedAt": "2026-11-07T15:37:04.546Z"
 }
