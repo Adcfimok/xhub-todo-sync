@@ -35,7 +35,9 @@ let lastLocalPoll = 0
 store.onChange((event, payload) => broadcast(event, payload))
 
 function broadcast(event, payload) {
-  const chunk = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
+  // 带 id 才能让 EventSource 在重连时自动回传 Last-Event-ID，断线期间的变更可精确补齐
+  const idLine = payload && Number.isFinite(payload.seq) ? `id: ${payload.seq}\n` : ''
+  const chunk = `${idLine}event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
   for (const res of sseClients) {
     try {
       res.write(chunk)
@@ -45,17 +47,79 @@ function broadcast(event, payload) {
   }
 }
 
+/**
+ * 挂一条 SSE 连接。PC 页面与手机端共用同一套推送，
+ * 区别只在鉴权方式（PC 走本机来源校验，手机走 Bearer 令牌）。
+ * 若请求带了 Last-Event-ID，先把断线期间的变更补发，再进入实时流。
+ */
+function attachStream(req, res, url, device) {
+  res.writeHead(200, Object.assign({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  }, res._cors || {}))
+
+  const lastId = Number(req.headers['last-event-id'] || url.searchParams.get('lastEventId') || 0)
+  let catchup = []
+  if (lastId > 0) {
+    const gap = store.changesSince(lastId, 500, null)
+    catchup = gap.changes
+  }
+  res.write(`event: hello\ndata: ${JSON.stringify({
+    seq: store.state.seq,
+    serverTime: Date.now(),
+    catchup: catchup.length,
+  })}\n\n`)
+  for (const rec of catchup) {
+    res.write(`id: ${rec.seq}\nevent: change\ndata: ${JSON.stringify({ seq: rec.seq, id: rec.id, col: rec.col })}\n\n`)
+  }
+
+  sseClients.add(res)
+  const hb = setInterval(() => {
+    try {
+      res.write(`event: ping\ndata: ${JSON.stringify({ serverTime: Date.now() })}\n\n`)
+      if (device) store.touch(device.id)
+    } catch (_) {}
+  }, 25000)
+  hb.unref?.()
+  req.on('close', () => {
+    clearInterval(hb)
+    sseClients.delete(res)
+  })
+}
+
 // ---------- 工具 ----------
 
 function send(res, status, obj) {
   const body = JSON.stringify(obj)
-  res.writeHead(status, {
+  res.writeHead(status, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
-  })
+  }, res._cors || {}))
   res.end(body)
+}
+
+/** 本机接口允许的来源：扩展页面自身（同源），以及 localhost 别名 */
+function allowedOrigin(port) {
+  return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`])
+}
+
+/**
+ * 按路径分流 CORS：
+ * - /api/v1/* 是手机端用的，靠 Authorization 里的 Bearer 令牌鉴权、不依赖 Cookie，
+ *   因此允许任意来源（手机页面 origin 是它自己的 127.0.0.1:47xxx，必须跨源）；
+ * - 其余（/api/local、/api/admin、静态资源）一律按同源收紧，返回 null 表示应当拒绝。
+ */
+function corsFor(req, pathname, port) {
+  if (pathname.startsWith('/api/v1/')) return { 'Access-Control-Allow-Origin': '*' }
+  const origin = req.headers.origin
+  if (!origin) return {} // 同源请求 / 非浏览器客户端不发 Origin，放行
+  if (allowedOrigin(port).has(origin)) {
+    return { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+  }
+  return null
 }
 
 function fail(res, status, code, extra) {
@@ -65,17 +129,25 @@ function fail(res, status, code, extra) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0
+    let aborted = false
     const chunks = []
     req.on('data', (c) => {
+      if (aborted) return
       size += c.length
       if (size > BODY_LIMIT) {
+        // 不能直接 destroy：socket 一断，外层就没法把 413 写回去，
+        // 客户端只会看到 ECONNRESET。改为丢弃剩余数据、让请求正常结束。
+        aborted = true
+        chunks.length = 0
+        req.removeAllListeners('data')
+        req.resume()
         reject(Object.assign(new Error('payload too large'), { code: 'PAYLOAD_TOO_LARGE' }))
-        req.destroy()
         return
       }
       chunks.push(c)
     })
     req.on('end', () => {
+      if (aborted) return
       if (!chunks.length) return resolve({})
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
@@ -85,6 +157,31 @@ function readBody(req) {
     })
     req.on('error', reject)
   })
+}
+
+/** 滑动窗口限流：按「来源 + 路径前缀」计数，超限返回 429 */
+const rateBuckets = new Map()
+function rateLimit(key, max, windowMs) {
+  const now = Date.now()
+  let b = rateBuckets.get(key)
+  if (!b || now > b.reset) {
+    b = { n: 0, reset: now + windowMs }
+    rateBuckets.set(key, b)
+  }
+  b.n += 1
+  return b.n <= max
+}
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, b] of rateBuckets) if (now > b.reset) rateBuckets.delete(k)
+}, 60000).unref?.()
+
+/** 每类接口的阈值：配对最容易被打，给得最紧 */
+function limitFor(pathname) {
+  if (pathname === '/api/v1/pair') return { max: 10, windowMs: 60000, bucket: 'pair' }
+  if (pathname.startsWith('/api/v1/sync')) return { max: 120, windowMs: 60000, bucket: 'sync' }
+  if (pathname.startsWith('/api/v1/')) return { max: 240, windowMs: 60000, bucket: 'v1' }
+  return { max: 600, windowMs: 60000, bucket: 'local' }
 }
 
 function isLocal(req) {
@@ -296,12 +393,26 @@ function serveExtAsset(req, res, url, extId, rel, token) {
 // ---------- KV（扩展 storage/config） ----------
 
 let kvCache = null
+let kvFatal = null
 function kvLoad() {
   if (kvCache) return kvCache
   try {
     kvCache = JSON.parse(fs.readFileSync(KV_FILE, 'utf8'))
   } catch (e) {
-    kvCache = {}
+    if (e.code === 'ENOENT') {
+      kvCache = {}
+    } else {
+      // 与状态库同样处理：隔离坏文件，不静默重置后被下一次 kvSave 覆盖
+      const bad = `${KV_FILE}.corrupt-${Date.now()}`
+      try {
+        fs.renameSync(KV_FILE, bad)
+        console.error(`[kv] 配置损坏，已隔离到 ${bad}：${e.message}`)
+      } catch (renameErr) {
+        console.error('[kv] 配置损坏且隔离失败:', renameErr.message)
+      }
+      kvCache = {}
+      kvFatal = { code: 'KV_CORRUPT', message: `扩展配置损坏，已隔离为 ${bad}`, at: Date.now() }
+    }
   }
   return kvCache
 }
@@ -321,19 +432,43 @@ function kvSave() {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
+  const port = server.address() ? server.address().port : PORT
+
+  // 任何路径先过来源判定：不在白名单的跨源请求连 CORS 头都拿不到，响应也读不出去
+  const cors = corsFor(req, pathname, port)
+  if (cors === null) return fail(res, 403, 'BAD_ORIGIN')
+  res._cors = cors
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Hub-Device, X-Hub-Proto',
+    res.writeHead(204, Object.assign({
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Hub-Device, X-Hub-Proto, X-Hub-Local',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    })
+      'Access-Control-Max-Age': '600',
+    }, cors))
     res.end()
     return
   }
 
   for (const prefix of LOCAL_ONLY) {
-    if (pathname.startsWith(prefix) && !isLocal(req)) return fail(res, 403, 'LOCAL_ONLY')
+    if (!pathname.startsWith(prefix)) continue
+    if (!isLocal(req)) return fail(res, 403, 'LOCAL_ONLY')
+    // SSE 用 EventSource 发不出自定义头，改用来源校验（跨源会带 Origin，已在上面拦掉）
+    const isStream = pathname === '/api/local/stream'
+    // 其余本机接口强制带自定义头：跨站请求带自定义头会触发预检，预检被拦就发不出去
+    if (!isStream && req.headers['x-hub-local'] !== '1') {
+      return fail(res, 403, 'LOCAL_HEADER_REQUIRED')
+    }
+    break
+  }
+
+  // 限流：healthz 是宿主探活，不能拦；其余按类别计数
+  if (pathname !== '/healthz') {
+    const lim = limitFor(pathname)
+    const key = (req.socket.remoteAddress || '?') + '|' + lim.bucket
+    if (!rateLimit(key, lim.max, lim.windowMs)) {
+      res.setHeader('Retry-After', '60')
+      return fail(res, 429, 'RATE_LIMITED')
+    }
   }
 
   try {
@@ -358,9 +493,11 @@ const server = http.createServer(async (req, res) => {
       })
     }
 
-    // 本机自检：给扩展页面排查「为什么手机连不上」用（只允许本机访问）
+    // 本机自检：给扩展页面排查「为什么手机连不上」用（只允许本机页面访问）
     if (pathname === '/api/v1/diag') {
       if (!isLocal(req)) return fail(res, 403, 'LOCAL_ONLY')
+      // 诊断结果含网卡与内网地址，同样要求自定义头，挡住跨站读取
+      if (req.headers['x-hub-local'] !== '1') return fail(res, 403, 'LOCAL_HEADER_REQUIRED')
       const addrs = lanAddresses()
       return send(res, 200, {
         app: APP,
@@ -426,7 +563,16 @@ const server = http.createServer(async (req, res) => {
       for (const raw of changes) {
         const out = store.merge(raw, dev.id)
         if (out.accepted) applied++
-        else if (out.reason !== 'DUPLICATE') rejected.push({ id: raw.id, reason: out.reason, winnerHlc: out.winnerHlc })
+        else if (out.reason !== 'DUPLICATE') {
+          // 把胜出版本一并回传：手机端要据此算出「哪几个字段被覆盖」，
+          // 只给一个 winnerHlc 的话，冲突详情只能是空白
+          rejected.push({
+            id: raw.id,
+            reason: out.reason,
+            winnerHlc: out.winnerHlc,
+            winner: store.get(raw.id),
+          })
+        }
         if (out.conflict) {
           conflicts.push({
             id: out.conflict.id,
@@ -463,26 +609,13 @@ const server = http.createServer(async (req, res) => {
       const dev = store.auth(tokenOf(req, url))
       if (!dev) return fail(res, 401, 'UNAUTHORIZED')
       store.touch(dev.id)
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Access-Control-Allow-Origin': '*',
-      })
-      res.write(`event: hello\ndata: ${JSON.stringify({ seq: store.state.seq, serverTime: Date.now() })}\n\n`)
-      sseClients.add(res)
-      const hb = setInterval(() => {
-        try {
-          res.write(`event: ping\ndata: ${JSON.stringify({ serverTime: Date.now() })}\n\n`)
-          store.touch(dev.id)
-        } catch (_) {}
-      }, 25000)
-      req.on('close', () => {
-        clearInterval(hb)
-        sseClients.delete(res)
-      })
-      return
+      return attachStream(req, res, url, dev)
+    }
+
+    // 本机页面用的推送通道：同源（无 Origin）或白名单来源才能连，
+    // 跨站 EventSource 会带自己的 Origin，在上面的 corsFor 就被拒了
+    if (pathname === '/api/local/stream') {
+      return attachStream(req, res, url, null)
     }
 
     // ---- 仅本机：宿主桥接 ----
@@ -559,6 +692,10 @@ const server = http.createServer(async (req, res) => {
         stats: store.stats(),
         collections: COLLECTIONS,
         pcPageOnline: Date.now() - lastLocalPoll < 12000,
+        // 可靠性告警：页面据此显示红条，而不是让用户蒙在鼓里
+        fatal: store.fatal || kvFatal || null,
+        readOnly: store.readOnly,
+        saveFails: store.saveFails || 0,
         conflicts: store.state.conflicts.slice(0, 60).map((c) => ({
           at: c.at,
           col: c.col,
@@ -609,49 +746,11 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { removed: store.purgeTombstones() })
     }
 
-    // ---- AI 中转：手机端不直连外部供应商，密钥只在手机与电脑之间传递 ----
-    if (pathname === '/api/ai/chat' && req.method === 'POST') {
-      const dev = store.auth(tokenOf(req, url))
-      if (!dev) return fail(res, 401, 'UNAUTHORIZED')
-      const body = await readBody(req)
-      const base = String(body.baseURL || '').replace(/\/+$/, '')
-      const key = String(body.apiKey || '')
-      const model = String(body.model || '')
-      if (!base || !key || !model) return fail(res, 400, 'BAD_REQUEST', { message: '缺少 baseURL / apiKey / model' })
-      const messages = Array.isArray(body.messages) ? body.messages.slice(-40) : []
-
-      let upstream
-      try {
-        upstream = await fetch(base + '/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-          body: JSON.stringify({ model: model, messages: messages, stream: true, temperature: body.temperature == null ? 0.7 : body.temperature }),
-        })
-      } catch (e) {
-        return fail(res, 502, 'UPSTREAM_UNREACHABLE', { message: String(e.message || e) })
-      }
-      if (!upstream.ok) {
-        let detail = ''
-        try { detail = (await upstream.text()).slice(0, 400) } catch (_) {}
-        return fail(res, upstream.status === 401 ? 401 : 502, upstream.status === 401 ? 'UPSTREAM_AUTH' : 'UPSTREAM_ERROR', { message: detail || ('HTTP ' + upstream.status) })
-      }
-
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-      })
-      const reader = upstream.body.getReader()
-      const pump = () => reader.read().then(({ done, value }) => {
-        if (done) { res.end(); return }
-        res.write(Buffer.from(value))
-        return pump()
-      })
-      req.on('close', () => { try { reader.cancel() } catch (_) {} })
-      return pump().catch((e) => {
-        try { res.write('data: ' + JSON.stringify({ error: String(e.message || e) }) + '\n\n') } catch (_) {}
-        res.end()
+    // 审计日志：谁在何时改了哪条（只读，本机接口）
+    if (pathname === '/api/admin/audit' && req.method === 'GET') {
+      return send(res, 200, {
+        items: store.auditLog(url.searchParams.get('limit')),
+        total: store.state.audit.length,
       })
     }
 
@@ -763,6 +862,19 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
+// 慢连接防护：半截请求头 / 长期不结束的请求都要能自动回收
+server.headersTimeout = 15000
+server.requestTimeout = 30000
+server.keepAliveTimeout = 5000
+server.maxConnections = 64
+server.on('clientError', (err, socket) => {
+  if (socket.writable) {
+    socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+  } else {
+    socket.destroy()
+  }
+})
+
 server.listen(PORT, HOST, () => {
   const addr = server.address()
   console.log(`[todo-relay] listening on ${HOST}:${addr.port} (proto ${PROTO})`)
@@ -784,10 +896,25 @@ purgeTimer.unref()
 
 function shutdown(sig) {
   console.log('[todo-relay] shutting down:', sig)
-  store.flush()
+  try {
+    store.flushSync()
+  } catch (e) {
+    console.error('[todo-relay] 退出前落盘失败:', e.message)
+  }
   server.close(() => process.exit(0))
   setTimeout(() => process.exit(0), 1500)
 }
 process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
-process.on('uncaughtException', (e) => console.error('[todo-relay] uncaught:', e))
+process.on('uncaughtException', (e) => {
+  // 异常后进程状态已不可信：先把内存状态落盘，再退出交给宿主拉起
+  console.error('[todo-relay] uncaught:', e)
+  try {
+    store.flushSync()
+  } catch (_) {}
+  server.close(() => process.exit(1))
+  setTimeout(() => process.exit(1), 1500)
+})
+process.on('unhandledRejection', (e) => {
+  console.error('[todo-relay] unhandledRejection:', e)
+})

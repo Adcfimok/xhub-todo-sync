@@ -20,6 +20,9 @@
     qrFor: '',
     unauthorized: false,
     col: 'todos',
+    polling: null,
+    lastPollAt: 0,
+    streamOk: false,
   }
 
   var POLL_MS = 4000
@@ -37,14 +40,27 @@
 
   // ---------------------------------------------------------------- 基础
 
+  var SVC_TIMEOUT = 8000
+
   function svc(path, opts) {
     opts = opts || {}
-    var init = { method: opts.method || 'GET' }
+    // 本机接口要求带自定义头：跨站请求发不出自定义头（会先触发预检并被拒），
+    // 这是拦 CSRF 的第三道，前两道是 Origin 白名单与 isLocal。
+    var init = { method: opts.method || 'GET', headers: { 'X-Hub-Local': '1' } }
     if (opts.body) {
-      init.headers = { 'Content-Type': 'application/json' }
+      init.headers['Content-Type'] = 'application/json'
       init.body = opts.body
     }
-    return api.service.request(path, init).then(function (r) {
+    // 服务端卡住时不能让按钮永远转圈，超时后按失败处理，下次轮询再试
+    var timeout = new Promise(function (_, reject) {
+      setTimeout(function () {
+        var err = new Error('请求超时')
+        err.code = 'TIMEOUT'
+        err.timeout = true
+        reject(err)
+      }, opts.timeout || SVC_TIMEOUT)
+    })
+    var call = api.service.request(path, init).then(function (r) {
       return r.json().then(function (d) {
         if (r.status >= 400) {
           var err = new Error((d && (d.message || d.code)) || 'HTTP ' + r.status)
@@ -55,6 +71,7 @@
         return d
       })
     })
+    return Promise.race([call, timeout])
   }
 
   function fmtTime(ms) {
@@ -418,6 +435,35 @@
 
   // ---------------------------------------------------------------- 渲染
 
+  /**
+   * 可靠性告警：库损坏/只读要显眼（红），写盘失败退避重试中次之（橙）。
+   * 这些状态以前只打在服务端控制台，用户看不到，等于没有。
+   */
+  function renderFatal(a) {
+    var el = $('fatal-bar')
+    if (!el) return
+    var msg = ''
+    var level = 'error'
+    if (a && a.fatal && a.fatal.message) {
+      msg = a.fatal.code === 'STATE_CORRUPT'
+        ? '本地库损坏：' + a.fatal.message + '。当前为只读模式，改动不会保存。'
+        : '扩展配置损坏：' + a.fatal.message + '。'
+    } else if (a && a.readOnly) {
+      msg = '本地库处于只读模式（未找到可用的状态文件），改动不会保存。'
+    } else if (a && a.saveFails > 0) {
+      level = 'warn'
+      msg = '本地库写入失败 ' + a.saveFails + ' 次，正在自动重试；期间改动可能未落盘。'
+    }
+    if (!msg) {
+      el.hidden = true
+      el.textContent = ''
+      return
+    }
+    el.className = 'fatal-bar' + (level === 'warn' ? ' warn' : '')
+    el.textContent = msg
+    el.hidden = false
+  }
+
   function render() {
     var a = S.admin
     var st = a && a.stats
@@ -438,6 +484,8 @@
     renderStats(a)
     renderContent(a)
     renderConflicts(a ? a.conflicts : [])
+
+    renderFatal(a)
 
     $('bar-left').textContent = S.lastError
       ? '上次错误：' + S.lastError
@@ -852,10 +900,13 @@
       setStatus('error', '不在 x-hub 内运行')
       return Promise.resolve()
     }
-    return svc('/api/admin/state')
+    // 单飞：上一次还没回来就不再叠加，避免服务端卡顿时排起一队请求
+    if (S.polling) return S.polling
+    S.polling = svc('/api/admin/state')
       .then(function (d) {
         S.admin = d
         S.unauthorized = false
+        S.lastPollAt = Date.now()
         if (!S.lastSyncAt) S.lastSyncAt = d.serverTime
         render()
       })
@@ -863,6 +914,48 @@
         S.admin = null
         handleErr(e)
       })
+      .finally(function () {
+        S.polling = null
+      })
+    return S.polling
+  }
+
+  // ---------------------------------------------------------------- 实时推送
+
+  var stream = null
+  var streamFails = 0
+
+  /**
+   * 服务端早就实现了 SSE，此前两端都没接，只能靠 4 秒轮询。
+   * 接上之后改动基本是即时到达；轮询降级为兜底（断线时仍然可用）。
+   */
+  function connectStream() {
+    if (typeof EventSource === 'undefined') return
+    if (stream && stream.readyState !== EventSource.CLOSED) return
+    try {
+      stream = new EventSource('/api/local/stream')
+    } catch (e) {
+      return
+    }
+    stream.addEventListener('hello', function () {
+      streamFails = 0
+      S.streamOk = true
+      poll()
+    })
+    stream.addEventListener('change', function () {
+      // 有变更就拉一次状态；拉取本身很轻，且已做单飞
+      poll()
+    })
+    stream.addEventListener('peer', function () { poll() })
+    stream.onerror = function () {
+      streamFails += 1
+      S.streamOk = false
+      // EventSource 自带重连；连续失败太多就关掉，让轮询接管，避免空转
+      if (streamFails > 5 && stream) {
+        try { stream.close() } catch (_) {}
+        stream = null
+      }
+    }
   }
 
   // ---------------------------------------------------------------- 启动
@@ -913,9 +1006,14 @@
   bind()
   bindPermButton()
   bindDownload()
+  connectStream()
   poll()
   syncOnce()
-  setInterval(poll, POLL_MS)
+  setInterval(function () {
+    // SSE 正常时把轮询降为 20 秒兜底；断线则立刻回到 4 秒
+    if (S.streamOk && Date.now() - (S.lastPollAt || 0) < 20000) return
+    poll()
+  }, POLL_MS)
   setInterval(drainOutbound, 5000)
   setInterval(bridgeLoop, 1500)
 })()

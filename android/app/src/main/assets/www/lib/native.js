@@ -64,6 +64,23 @@ function installHooks() {
     PENDING.delete(id)
     e.reject(toHttpError(code, body))
   }
+
+  /**
+   * 原生回调的统一入口：Java 侧只传「事件名 + 一个 JSON 字符串」，
+   * 由这里解析后再分发。多参数直接拼进 JS 源码容易构造出越界语法，
+   * 收敛成单入口后，注入面只剩「一个引号包裹的字符串」。
+   */
+  window.__nativeEmit = function (fn, json) {
+    let p = {}
+    try {
+      p = JSON.parse(json || '{}')
+    } catch (err) {
+      return
+    }
+    if (fn === 'chunk') window.__httpChunk(p.id, p.text)
+    else if (fn === 'done') window.__httpDone(p.id)
+    else if (fn === 'error') window.__httpError(p.id, p.code || 0, p.body || '')
+  }
 }
 
 /**

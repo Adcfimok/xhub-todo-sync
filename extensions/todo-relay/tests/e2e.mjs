@@ -27,8 +27,16 @@ function ok(name, cond, extra) {
   }
 }
 
+// 本机接口要求带自定义头（跨站伪造不出来）；测试作为「本机页面」统一带上
+const LOCAL_HEADER = { 'X-Hub-Local': '1' }
+const isLocalApi = (path) =>
+  path.startsWith('/api/local') || path.startsWith('/api/admin') || path.startsWith('/api/v1/diag')
+
 const req = async (path, opts = {}) => {
-  const r = await fetch(BASE + path, opts)
+  const extra = isLocalApi(path) ? LOCAL_HEADER : {}
+  const r = await fetch(BASE + path, Object.assign({}, opts, {
+    headers: Object.assign({}, extra, opts.headers || {}),
+  }))
   const text = await r.text()
   let body = null
   try {
@@ -208,60 +216,19 @@ try {
   stEmpty = await req('/api/admin/state')
   ok('显式 allowEmpty 才真删', r.body.prunedSkipped !== true && stEmpty.body.stats.byCol.notes.live === 0)
 
-  console.log('\n[7] AI 中转（流式透传）')
-  const fake = http.createServer((rq, rs) => {
-    if (!rq.url.endsWith('/chat/completions')) return rs.writeHead(404).end()
-    rs.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    const parts = ['你好', '，这是', '流式返回。']
-    let i = 0
-    const timer = setInterval(() => {
-      if (i >= parts.length) {
-        rs.write('data: [DONE]\n\n')
-        rs.end()
-        clearInterval(timer)
-        return
-      }
-      rs.write('data: ' + JSON.stringify({ choices: [{ delta: { content: parts[i++] } }] }) + '\n\n')
-    }, 40)
-  })
-  await new Promise((r) => fake.listen(48998, '127.0.0.1', r))
-
-  const aiRes = await fetch(BASE + '/api/ai/chat', {
+  console.log('\n[7] AI 中转端点已移除（SSRF 收口）')
+  r = await req('/api/ai/chat', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, H),
     body: JSON.stringify({
-      baseURL: 'http://127.0.0.1:48998/v1',
+      baseURL: 'http://169.254.169.254/latest',
       apiKey: 'sk-test',
       model: 'fake',
       messages: [{ role: 'user', content: 'hi' }],
     }),
   })
-  ok('AI 中转返回 SSE', aiRes.status === 200 && /text\/event-stream/.test(aiRes.headers.get('content-type') || ''))
-  const reader = aiRes.body.getReader()
-  const dec = new TextDecoder()
-  let buf = ''
-  let acc = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += dec.decode(value, { stream: true })
-    for (const line of buf.split('\n')) {
-      if (!line.startsWith('data:')) continue
-      const d = line.slice(5).trim()
-      if (!d || d === '[DONE]') continue
-      try {
-        acc += JSON.parse(d).choices[0].delta.content || ''
-      } catch {
-        /* 忽略半包 */
-      }
-    }
-    buf = ''
-  }
-  ok('逐块拼接后内容完整', acc === '你好，这是流式返回。', acc)
-  fake.close()
-
-  r = await req('/api/ai/chat', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, H), body: '{}' })
-  ok('缺参数被拒', r.status === 400)
+  ok('原 SSRF 端点已下线（404）', r.status === 404, r.status)
+  ok('不再返回任何上游内容', typeof r.body === 'object' && r.body.code === 'NOT_FOUND')
 
   console.log('\n[8] 设备与扩展')
   r = await req('/ext/list', { headers: H })

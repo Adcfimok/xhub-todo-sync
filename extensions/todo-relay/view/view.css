@@ -288,6 +288,24 @@ body {
 .device .revoke:hover { color: var(--red); background: var(--surface); }
 .device[data-online='1'] .state { color: var(--green); }
 
+/* ---------- 可靠性告警条 ---------- */
+/* 库损坏 / 只读 / 写盘失败都在这里说清楚，不让问题只留在控制台 */
+.fatal-bar {
+  flex: none;
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 32%, transparent);
+  color: var(--red);
+}
+.fatal-bar.warn {
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  border-color: color-mix(in srgb, var(--orange) 32%, transparent);
+  color: var(--orange);
+}
+
 /* ---------- 安卓端下载 ---------- */
 /* 整行是一颗按钮：避开了 target="_blank"（宿主 iframe 没有 allow-popups，
    会被静默拦截），点击走 xhub.openExternal 交给宿主的应用内浏览器。 */

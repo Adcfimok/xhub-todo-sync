@@ -14,6 +14,8 @@ import java.net.Socket;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 极简本地资源服务。
@@ -52,6 +54,7 @@ final class AssetServer implements Runnable {
     private static final int[] PREFERRED_PORTS = {47830, 47831, 47832, 47833};
 
     private final AssetManager assets;
+    private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private ServerSocket server;
     private Thread thread;
     private volatile boolean running;
@@ -105,14 +108,20 @@ final class AssetServer implements Runnable {
             if (server != null) server.close();
         } catch (IOException ignored) {
         }
+        pool.shutdownNow();
     }
 
+    /**
+     * 连接处理改成线程池。
+     * 原来是串行 accept + handle：页面加载时并发拉 index.html、多个 js/css，
+     * 任何一个慢连接都会把后来的请求一起堵住，WebView 侧表现为「白屏很久」。
+     */
     @Override
     public void run() {
         while (running) {
             try {
-                Socket s = server.accept();
-                handle(s);
+                final Socket s = server.accept();
+                pool.submit(() -> handle(s));
             } catch (IOException e) {
                 if (running) Log.w(TAG, "accept failed: " + e.getMessage());
             }

@@ -21,17 +21,66 @@ const DATA_DIR = process.env.RELAY_DATA_DIR
   ? path.resolve(process.env.RELAY_DATA_DIR)
   : path.join(__dirname, '..', '.data')
 const DATA_FILE = path.join(DATA_DIR, 'hub.json')
+const BAK_FILE = DATA_FILE + '.bak'
+const WAL_FILE = path.join(DATA_DIR, 'hub.wal')
 const LOG_LIMIT = 4000
 const CONFLICT_LIMIT = 200
+const AUDIT_LIMIT = 500
 const TOMBSTONE_MS = 30 * 24 * 3600 * 1000
 const PAIR_TTL_MS = 5 * 60 * 1000
 const MAX_DEVICES = 8
+/** 配对码连续输错这么多次就作废当前码——必须真拒绝，不能只提示 */
+const MAX_PAIR_ATTEMPTS = 5
 const HOST_DEVICE = 'pc-host'
+/** WAL 攒到这么多条提交、或距上次快照超过这么久，就做一次全量快照并清空 WAL */
+const WAL_COMPACT_ENTRIES = 200
+const WAL_COMPACT_MS = 60 * 1000
 
 const COLLECTIONS = ['todos', 'notes', 'stickies', 'resources', 'snippets']
 
+/**
+ * 各字段的长度上限，集中一处，避免再出现「notes 允许 20 万、备注只允许 200」这种
+ * 同一函数里的自相矛盾。超限会告警，不静默截断。
+ */
+const FIELD_LIMITS = {
+  // title 对所有集合统一 500，与历史行为保持一致；集合特有字段各自列明
+  'todos.title': 500,
+  'notes.title': 500,
+  'stickies.title': 500,
+  'snippets.title': 500,
+  'resources.title': 500,
+  'todos.description': 20000,
+  'todos.parentId': 200,
+  'todos.repeatMode': 16,
+  'notes.content': 200000,
+  'stickies.content': 20000,
+  'resources.name': 200,
+  'resources.target': 2000,
+  'resources.category': 60,
+  'resources.icon': 200,
+  'resources.args': 400,
+  'snippets.content': 20000,
+}
+
 function sha256(s) {
   return crypto.createHash('sha256').update(s).digest('hex')
+}
+
+/** 等长摘要后再比较，避免逐字符短路带来的时间侧信道 */
+function safeEqual(a, b) {
+  const ha = Buffer.from(sha256(String(a)), 'hex')
+  const hb = Buffer.from(sha256(String(b)), 'hex')
+  return ha.length === hb.length && crypto.timingSafeEqual(ha, hb)
+}
+
+function clip(col, field, value) {
+  const max = FIELD_LIMITS[col + '.' + field]
+  const s = value == null ? '' : String(value)
+  if (max && s.length > max) {
+    console.warn(`[store] ${col}.${field} 超长，截断 ${s.length} → ${max}`)
+    return s.slice(0, max)
+  }
+  return s
 }
 
 function emptyState(hubName) {
@@ -45,6 +94,7 @@ function emptyState(hubName) {
     log: [],
     devices: {},
     conflicts: [],
+    audit: [],
     host: { mirror: {}, cursor: 0, outbox: [] },
     pair: null,
   }
@@ -60,32 +110,114 @@ function parseHostTime(s) {
 class Store {
   constructor(hubName) {
     this.clock = new Clock('hub-' + (hubName || 'x-hub'))
+    this.readOnly = false
+    this.fatal = null
+    this.saveFails = 0
+    this.dirty = false
+    this.saveTimer = null
+    this.retryTimer = null
+    this.savePromise = null
+    this.walQueue = []
+    this.walWriting = false
+    this.walEntries = 0
+    this.lastCompact = Date.now()
+    this.recoveredFrom = null
+
     const loaded = this.load()
-    this.state = loaded && loaded.v === 2 ? loaded : emptyState(hubName)
+    this.state = loaded.state || emptyState(hubName)
+    if (loaded.fatal) {
+      // 坏库且无备份可恢复：只读启动，宁可停写也不覆盖现场
+      this.readOnly = true
+      this.fatal = loaded.fatal
+    }
+    if (loaded.recoveredFrom) this.recoveredFrom = loaded.recoveredFrom
+
     this.hostIndex = {}
     for (const rec of Object.values(this.state.records)) {
       if (rec.hostId != null) this.hostIndex[rec.col + ':' + rec.hostId] = rec.id
     }
-    this.saveTimer = null
-    this.dirty = false
     this.listeners = new Set()
   }
 
   // ---------- 持久化 ----------
 
+  /**
+   * 读状态：快照 + WAL 重放。
+   * 快照损坏时隔离原文件、尝试备份；都失败则返回 fatal 让调用方转只读。
+   * 任何情况下都不返回「空库」来顶替损坏的真实数据——那会导致下一次落盘覆盖原件。
+   */
   load() {
+    let snapshot = null
+    let fatal = null
+    let recoveredFrom = null
+
     try {
       const raw = fs.readFileSync(DATA_FILE, 'utf8')
       const s = JSON.parse(raw)
-      if (!s || typeof s !== 'object' || typeof s.records !== 'object') return null
-      return s
+      if (!s || typeof s !== 'object' || typeof s.records !== 'object') {
+        throw new Error('结构不合法（缺少 records）')
+      }
+      snapshot = s
     } catch (e) {
-      if (e.code !== 'ENOENT') console.error('[store] 读取失败，按空库启动:', e.message)
-      return null
+      if (e.code === 'ENOENT') {
+        snapshot = null
+      } else {
+        const bad = `${DATA_FILE}.corrupt-${Date.now()}`
+        try {
+          fs.renameSync(DATA_FILE, bad)
+          console.error(`[store] 状态文件损坏，已隔离到 ${bad}：${e.message}`)
+        } catch (renameErr) {
+          console.error('[store] 状态文件损坏且隔离失败:', renameErr.message)
+        }
+        try {
+          const s = JSON.parse(fs.readFileSync(BAK_FILE, 'utf8'))
+          if (s && typeof s.records === 'object') {
+            snapshot = s
+            recoveredFrom = BAK_FILE
+            console.error(`[store] 已从备份恢复（${Object.keys(s.records).length} 条记录）`)
+          }
+        } catch (_) {
+          fatal = {
+            code: 'STATE_CORRUPT',
+            message: `状态文件损坏且无法从备份恢复；原件已隔离为 ${bad}`,
+            at: Date.now(),
+          }
+        }
+      }
     }
+
+    if (!snapshot) return { state: null, fatal, recoveredFrom }
+
+    // WAL 重放：逐行读，单行坏了只丢那一行，不影响其余
+    try {
+      const wal = fs.readFileSync(WAL_FILE, 'utf8')
+      let replayed = 0
+      for (const line of wal.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const entry = JSON.parse(line)
+          if (!entry || !entry.id || !entry.rec) continue
+          if (entry.seq && entry.seq > snapshot.seq) snapshot.seq = entry.seq
+          snapshot.records[entry.id] = entry.rec
+          snapshot.log.push({ seq: entry.rec.seq || entry.seq, id: entry.id })
+          replayed++
+        } catch (_) {
+          /* 单行损坏跳过 */
+        }
+      }
+      if (snapshot.log.length > LOG_LIMIT) snapshot.log.splice(0, snapshot.log.length - LOG_LIMIT)
+      if (replayed) console.log(`[store] WAL 重放 ${replayed} 条`)
+    } catch (e) {
+      if (e.code !== 'ENOENT') console.error('[store] WAL 读取失败（忽略）:', e.message)
+    }
+
+    if (!Array.isArray(snapshot.audit)) snapshot.audit = []
+    if (!snapshot.host) snapshot.host = { mirror: {}, cursor: 0, outbox: [] }
+    return { state: snapshot, fatal: null, recoveredFrom }
   }
 
   scheduleSave() {
+    if (this.readOnly) return
     this.dirty = true
     if (this.saveTimer) return
     this.saveTimer = setTimeout(() => {
@@ -94,16 +226,102 @@ class Store {
     }, 400)
   }
 
+  /** 追加一条 WAL：轻量、异步、失败不阻塞主流程（快照会兜底） */
+  appendWal(rec) {
+    if (this.readOnly) return
+    try {
+      this.walQueue.push(JSON.stringify({ seq: rec.seq, id: rec.id, rec }) + '\n')
+      this.walEntries += 1
+    } catch (e) {
+      console.error('[store] WAL 序列化失败:', e.message)
+      this.scheduleSave()
+      return
+    }
+    this.drainWal()
+    if (this.walEntries >= WAL_COMPACT_ENTRIES) this.flush()
+  }
+
+  drainWal() {
+    if (this.walWriting || !this.walQueue.length) return
+    this.walWriting = true
+    const chunk = this.walQueue.join('')
+    this.walQueue = []
+    fs.promises
+      .mkdir(DATA_DIR, { recursive: true })
+      .then(() => fs.promises.appendFile(WAL_FILE, chunk))
+      .catch((e) => {
+        console.error('[store] WAL 追加失败（等快照兜底）:', e.message)
+        this.scheduleSave()
+      })
+      .finally(() => {
+        this.walWriting = false
+        if (this.walQueue.length) this.drainWal()
+      })
+  }
+
+  /** 全量快照：写 .tmp → 备份旧文件 → rename，全程异步 */
   flush() {
-    if (!this.dirty) return
-    this.dirty = false
+    if (this.readOnly || !this.dirty) return this.savePromise || Promise.resolve()
+    if (this.savePromise) return this.savePromise
+
+    this.savePromise = (async () => {
+      try {
+        await fs.promises.mkdir(DATA_DIR, { recursive: true })
+        const tmp = DATA_FILE + '.tmp'
+        const body = JSON.stringify(this.state)
+        await fs.promises.writeFile(tmp, body)
+
+        // 覆盖前留一代备份：坏库恢复靠它
+        try {
+          await fs.promises.copyFile(DATA_FILE, BAK_FILE)
+        } catch (e) {
+          if (e.code !== 'ENOENT') console.error('[store] 备份失败（继续写）:', e.message)
+        }
+
+        await fs.promises.rename(tmp, DATA_FILE)
+        this.dirty = false
+        this.saveFails = 0
+        this.walEntries = 0
+        this.lastCompact = Date.now()
+        // 快照已含 WAL 全部内容，安全清空
+        await fs.promises.writeFile(WAL_FILE, '').catch(() => {})
+        this.emit('saved', { bytes: body.length })
+      } catch (e) {
+        this.saveFails += 1
+        console.error(`[store] 落盘失败（第 ${this.saveFails} 次）:`, e.message)
+        this.emit('save-error', { message: e.message, fails: this.saveFails })
+        clearTimeout(this.retryTimer)
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null
+          this.flush()
+        }, Math.min(30000, 1000 * 2 ** this.saveFails))
+        this.retryTimer.unref?.()
+      } finally {
+        this.savePromise = null
+      }
+    })()
+    return this.savePromise
+  }
+
+  /** 进程退出用：同步写完再走，避免最后 400ms 的改动丢失 */
+  flushSync() {
+    if (this.readOnly) return
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true })
       const tmp = DATA_FILE + '.tmp'
       fs.writeFileSync(tmp, JSON.stringify(this.state))
+      try {
+        fs.copyFileSync(DATA_FILE, BAK_FILE)
+      } catch (_) {}
       fs.renameSync(tmp, DATA_FILE)
+      try {
+        fs.writeFileSync(WAL_FILE, '')
+      } catch (_) {}
+      this.dirty = false
+      this.saveFails = 0
+      this.walEntries = 0
     } catch (e) {
-      console.error('[store] 落盘失败:', e.message)
+      console.error('[store] 退出前落盘失败:', e.message)
     }
   }
 
@@ -135,7 +353,7 @@ class Store {
     return this.state.seq
   }
 
-  commit(rec) {
+  commit(rec, source) {
     const seq = this.nextSeq()
     rec.seq = seq
     this.state.records[rec.id] = rec
@@ -144,9 +362,35 @@ class Store {
     if (this.state.log.length > LOG_LIMIT) {
       this.state.log.splice(0, this.state.log.length - LOG_LIMIT)
     }
-    this.scheduleSave()
+    if (source) this.audit(source, rec)
+    // 先追加 WAL：单条只写几百字节，进程意外退出也能重放；
+    // 全量快照按条数/时间触发，避免每次改动都序列化整个库
+    this.appendWal(rec)
+    if (Date.now() - this.lastCompact > WAL_COMPACT_MS) this.scheduleSave()
     this.emit('change', { seq, id: rec.id, col: rec.col })
     return rec
+  }
+
+  /** 审计环形缓冲：谁在何时改了哪条、哪些字段 */
+  audit(action, rec, deviceId) {
+    if (!rec) return
+    const entry = {
+      at: Date.now(),
+      action: action || 'commit',
+      device: deviceId || rec.by || HOST_DEVICE,
+      col: rec.col,
+      id: rec.id,
+      deleted: !!rec.deleted,
+    }
+    this.state.audit.push(entry)
+    if (this.state.audit.length > AUDIT_LIMIT) {
+      this.state.audit.splice(0, this.state.audit.length - AUDIT_LIMIT)
+    }
+  }
+
+  auditLog(limit) {
+    const n = Math.max(1, Math.min(AUDIT_LIMIT, Number(limit) || 100))
+    return this.state.audit.slice(-n).reverse()
   }
 
   minSeq() {
@@ -154,20 +398,28 @@ class Store {
   }
 
   changesSince(sinceSeq, limit, cols) {
-    const out = []
-    let hasMore = false
+    // 同一个 id 在 log 里可能有多条（每次提交都记一条），按 id 聚合只留最新，
+    // 否则一次增量会把同一条记录重复推好几遍，手机端要做无谓的重复写入。
+    const seen = new Map()
+    let scanned = 0
     for (const e of this.state.log) {
       if (e.seq <= sinceSeq) continue
       const rec = this.state.records[e.id]
       if (!rec) continue
       if (cols && cols.length && cols.indexOf(rec.col) < 0) continue
-      if (out.length >= limit) {
-        hasMore = true
-        break
-      }
-      out.push(rec)
+      seen.set(rec.id, rec)
+      scanned++
+      if (seen.size >= limit) break
     }
-    return { changes: out, hasMore }
+    const changes = Array.from(seen.values())
+    // hasMore 用「是否还有未消费的 log 条目」判断，而不是本次条数，
+    // 避免重复条目把 limit 占满导致提前判定「还有更多」
+    let hasMore = false
+    if (changes.length) {
+      const lastSeq = changes.reduce((m, r) => Math.max(m, r.seq || 0), sinceSeq)
+      hasMore = this.state.log.some((e) => e.seq > lastSeq)
+    }
+    return { changes, hasMore, scanned }
   }
 
   snapshot(cols) {
@@ -207,12 +459,33 @@ class Store {
   merge(incoming, deviceId) {
     const rec = normalizeRecord(incoming)
     if (!rec) return { accepted: false, reason: 'BAD_RECORD' }
-    this.clock.observe(rec.hlc)
+
+    // 时钟异常必须拒收并留痕：静默采纳会让本机时钟被推到极远未来，
+    // 之后本机所有改动都被判 STALE；静默丢弃又会让改动凭空消失。
+    const clockOut = this.clock.observe(rec.hlc)
+    if (clockOut.rejected) {
+      this.state.audit.push({
+        at: Date.now(),
+        action: 'clock-anomaly',
+        device: deviceId,
+        col: rec.col,
+        id: rec.id,
+        reason: clockOut.reason,
+        driftMs: clockOut.drift || 0,
+      })
+      if (this.state.audit.length > AUDIT_LIMIT) this.state.audit.shift()
+      return {
+        accepted: false,
+        reason: 'CLOCK_ANOMALY',
+        clockReason: clockOut.reason,
+        driftMs: clockOut.drift || 0,
+      }
+    }
 
     const local = this.state.records[rec.id]
     if (!local) {
       rec.by = deviceId
-      this.commit(rec)
+      this.commit(rec, 'merge')
       if (deviceId !== HOST_DEVICE) this.pushOutbox(rec.id, rec.seq)
       return { accepted: true }
     }
@@ -229,7 +502,7 @@ class Store {
 
     rec.by = deviceId
     if (rec.hostId == null && local.hostId != null) rec.hostId = local.hostId
-    this.commit(rec)
+    this.commit(rec, 'merge')
     if (deviceId !== HOST_DEVICE) this.pushOutbox(rec.id, rec.seq)
     return { accepted: true, conflict }
   }
@@ -374,7 +647,10 @@ class Store {
 
   pushOutbox(id, seq) {
     this.state.host.outbox.push({ id, seq })
-    if (this.state.host.outbox.length > LOG_LIMIT) this.state.host.outbox.splice(0, 500)
+    if (this.state.host.outbox.length > LOG_LIMIT) {
+      // 按超出量裁剪，避免「刚好超一条却删掉 500 条」的过度丢弃
+      this.state.host.outbox.splice(0, this.state.host.outbox.length - LOG_LIMIT)
+    }
   }
 
   // ---------- 配对与设备 ----------
@@ -392,10 +668,22 @@ class Store {
   verifyCode(code) {
     const p = this.state.pair
     if (!p) return { ok: false, reason: 'INVALID_CODE' }
-    if (p.expiresAt <= Date.now()) return { ok: false, reason: 'INVALID_CODE' }
-    if (String(code) !== p.code) {
-      p.attempts += 1
-      return { ok: false, reason: p.attempts >= 5 ? 'TOO_MANY_ATTEMPTS' : 'INVALID_CODE' }
+    if (p.expiresAt <= Date.now()) return { ok: false, reason: 'EXPIRED' }
+    // 先判封禁再比码：否则「超限」只是句提示，猜对照样放行
+    if (p.locked || p.attempts >= MAX_PAIR_ATTEMPTS) {
+      return { ok: false, reason: 'TOO_MANY_ATTEMPTS' }
+    }
+    if (!safeEqual(String(code), p.code)) {
+      p.attempts = (p.attempts || 0) + 1
+      if (p.attempts >= MAX_PAIR_ATTEMPTS) {
+        // 锁死当前码（但不丢弃），让后续尝试明确拿到 TOO_MANY_ATTEMPTS；
+        // 用户点「换配对码」会生成新码，把枚举成本抬到「每次都要人点一下」
+        p.locked = true
+        this.scheduleSave()
+        return { ok: false, reason: 'TOO_MANY_ATTEMPTS' }
+      }
+      this.scheduleSave()
+      return { ok: false, reason: 'INVALID_CODE', remaining: MAX_PAIR_ATTEMPTS - p.attempts }
     }
     return { ok: true }
   }
@@ -492,6 +780,12 @@ class Store {
       seq: this.state.seq,
       minSeq: this.minSeq(),
       byCol,
+      // 可靠性状态：页面据此显示红条，而不是让问题只留在控制台
+      readOnly: this.readOnly,
+      fatal: this.fatal,
+      saveFails: this.saveFails || 0,
+      recoveredFrom: this.recoveredFrom,
+      walPending: this.walEntries || 0,
     }
   }
 
@@ -565,7 +859,7 @@ function normalizeRecord(r) {
   const base = {
     id: r.id.slice(0, 200),
     col: parsed.col,
-    title: String(r.title || '').slice(0, 500),
+    title: clip(parsed.col, 'title', r.title),
     deleted: !!r.deleted,
     hlc: r.hlc,
     hostId: r.hostId != null && r.hostId !== '' ? r.hostId : null,
@@ -579,17 +873,18 @@ function normalizeRecord(r) {
       priority: clampInt(r.priority, 0, 2),
       dueAt: toMsOrNull(r.dueAt),
       remindAt: toMsOrNull(r.remindAt),
-      description: String(r.description || '').slice(0, 200),
-      parentId: r.parentId ? String(r.parentId).slice(0, 200) : null,
+      // 备注与笔记同样属于「正文」，上限见 FIELD_LIMITS；超长会告警，不静默吞掉
+      description: clip('todos', 'description', r.description),
+      parentId: r.parentId ? clip('todos', 'parentId', r.parentId) : null,
       pinned: !!r.pinned,
-      repeatMode: String(r.repeatMode || 'once').slice(0, 16),
+      repeatMode: clip('todos', 'repeatMode', r.repeatMode || 'once'),
       createdAt: Number(r.createdAt) || Date.now(),
       completedAt: toMsOrNull(r.completedAt),
     })
   }
   if (parsed.col === 'notes') {
     return Object.assign(base, {
-      content: String(r.content || '').slice(0, 200000),
+      content: clip('notes', 'content', r.content),
       folderId: r.folderId != null ? r.folderId : null,
       createdAt: Number(r.createdAt) || Date.now(),
     })
@@ -597,25 +892,25 @@ function normalizeRecord(r) {
   if (parsed.col === 'stickies') {
     return Object.assign(base, {
       slot: Number(r.slot) || 1,
-      content: String(r.content || '').slice(0, 20000),
+      content: clip('stickies', 'content', r.content),
     })
   }
   if (parsed.col === 'resources') {
-    const name = String(r.name || r.title || '').slice(0, 200)
+    const name = clip('resources', 'name', r.name || r.title)
     return Object.assign(base, {
       kind: String(r.kind || 'web').slice(0, 8),
       name,
       title: name,
-      target: String(r.target || '').slice(0, 2000),
-      category: r.category == null ? null : String(r.category).slice(0, 60),
-      icon: r.icon == null ? null : String(r.icon).slice(0, 200),
-      args: r.args == null ? null : String(r.args).slice(0, 400),
+      target: clip('resources', 'target', r.target),
+      category: r.category == null ? null : clip('resources', 'category', r.category),
+      icon: r.icon == null ? null : clip('resources', 'icon', r.icon),
+      args: r.args == null ? null : clip('resources', 'args', r.args),
       zoneId: r.zoneId != null ? r.zoneId : null,
       createdAt: Number(r.createdAt) || Date.now(),
     })
   }
   return Object.assign(base, {
-    content: String(r.content || '').slice(0, 20000),
+    content: clip('snippets', 'content', r.content),
     pinned: !!r.pinned,
     createdAt: Number(r.createdAt) || Date.now(),
   })

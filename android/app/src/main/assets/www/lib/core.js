@@ -4,7 +4,15 @@ export const COLS = ['todos', 'notes', 'stickies', 'resources', 'snippets']
 export const COL_NAME = { todos: '待办', notes: '笔记', stickies: '便签', resources: '速达', snippets: '提示词' }
 export const DB_NAME = 'todolink'
 export const DB_VER = 2
-export const APP_VER = '2.9.0'
+/** 版本号优先取原生（与 APK 的 versionName 同源），取不到才回退到构建常量 */
+export const APP_VER = (function () {
+  try {
+    const v = window.Android && window.Android.appVersion && window.Android.appVersion()
+    return (v && String(v)) || '2.9.1'
+  } catch (e) {
+    return '2.9.0'
+  }
+})()
 
 const REQ_TIMEOUT = 9000
 
@@ -122,6 +130,7 @@ export const S = {
   conflicts: [],
   syncAt: 0,
   lastErr: '',
+  streamOk: false,
   listeners: new Set(),
 }
 
@@ -275,6 +284,50 @@ function scheduleBackoff() {
   SYNC.timer = setTimeout(() => syncNow('retry'), Math.max(1500, base + jitter))
 }
 
+// ---------------------------------------------------------------- 实时推送
+// 服务端 /api/v1/stream 早就实现了，但手机端一直靠 30 秒定时器发现改动，
+// 导致「PC 改完，手机半分钟后才变」。接上 SSE 后基本即时；
+// EventSource 不能设请求头，所以令牌走查询参数（服务端两种都认）。
+
+let es = null
+let esFails = 0
+
+export function connectStream() {
+  if (typeof EventSource === 'undefined') return
+  if (!S.meta.token || !S.meta.host) return
+  if (es && es.readyState !== EventSource.CLOSED) return
+  const url = 'http://' + S.meta.host + '/api/v1/stream?token=' + encodeURIComponent(S.meta.token)
+  try {
+    es = new EventSource(url)
+  } catch (e) {
+    es = null
+    return
+  }
+  es.addEventListener('hello', () => {
+    esFails = 0
+    S.streamOk = true
+    scheduleSoon()
+  })
+  es.addEventListener('change', () => scheduleSoon())
+  es.onerror = () => {
+    esFails += 1
+    S.streamOk = false
+    // 连续失败就关掉，交回 30 秒轮询兜底，别让它在后台空转重连
+    if (esFails > 5 && es) {
+      try { es.close() } catch (e) {}
+      es = null
+    }
+  }
+}
+
+export function closeStream() {
+  if (!es) return
+  try { es.close() } catch (e) {}
+  es = null
+  esFails = 0
+  S.streamOk = false
+}
+
 function strip(r) {
   const out = {}
   for (const k of Object.keys(r)) if (k !== 'dirty') out[k] = r[k]
@@ -311,12 +364,34 @@ export async function syncNow(reason) {
     }
 
     const rejected = {}
-    ;(res.rejected || []).forEach((x) => (rejected[x.id] = true))
+    ;(res.rejected || []).forEach((x) => (rejected[x.id] = x))
     const ops = []
     pushed.forEach((p) => {
       const r = findRec(p.id)
       if (!r || !r.dirty) return
-      if (r.hlc === p.hlc || rejected[p.id]) {
+      const rej = rejected[p.id]
+      if (rej) {
+        // 被拒绝＝服务端已有更新版本。以前这里直接清 dirty，
+        // 结果这条改动既不重试、也等不到覆盖，永远悬空且用户无感。
+        // 现在：记进冲突表 + 标 blocked，让胜出版本能落地，同时留下原值可查。
+        addConflict({
+          col: r.col,
+          id: r.id,
+          title: r.title,
+          fields: diffFields(r, rej.winner || {}),
+          winner: 'pc-host',
+          loser: 'phone',
+          reason: rej.reason || 'STALE',
+          localHlc: r.hlc,
+          remoteHlc: rej.winnerHlc || '',
+        })
+        r.dirty = 0
+        r.blocked = 1
+        ops.push({ type: 'put', value: r })
+        return
+      }
+      // 只有确认服务端收下了（hlc 未变）才清脏标记
+      if (r.hlc === p.hlc) {
         r.dirty = 0
         ops.push({ type: 'put', value: r })
       }
@@ -340,6 +415,7 @@ export async function syncNow(reason) {
     S.lastErr = String((e && e.message) || e)
     if (e && e.status === 401) {
       await saveMeta('token', '')
+      closeStream()
       setStatus('error', '需要重新配对')
     } else {
       setStatus('offline', e && e.timeout ? '电脑无响应' : '离线')
@@ -356,17 +432,52 @@ function addConflict(c) {
   if (S.conflicts.length > 50) S.conflicts.length = 50
 }
 
+/** 冲突涉及的可比较字段（与 PC 端 store 的 KEEP 白名单对齐） */
+const DIFF_FIELDS = {
+  todos: ['title', 'done', 'priority', 'dueAt', 'description', 'pinned'],
+  notes: ['title', 'content'],
+  stickies: ['content'],
+  resources: ['name', 'target'],
+  snippets: ['title', 'content'],
+}
+
+/**
+ * 算「本地版本与胜出版本」具体差在哪几个字段。
+ * 以前这里恒传空数组，界面上只能说「有冲突」，说不出冲突了什么。
+ */
+function diffFields(loser, winner) {
+  if (!loser || !winner) return []
+  const keys = DIFF_FIELDS[loser.col] || DIFF_FIELDS[winner.col] || ['title']
+  const out = []
+  for (const k of keys) {
+    const a = loser[k] == null ? '' : String(loser[k])
+    const b = winner[k] == null ? '' : String(winner[k])
+    if (a !== b) out.push(k)
+  }
+  if (!!loser.deleted !== !!winner.deleted) out.push('deleted')
+  return out
+}
+
 async function applyIncoming(list) {
   const ops = []
   for (const inc of list) {
     if (!inc || !inc.id) continue
     hlcObserve(inc.hlc)
     const local = findRec(inc.id)
-    if (local && local.dirty && local.hlc && local.hlc > inc.hlc) continue
-    if (local && local.dirty && local.hlc !== inc.hlc) {
-      addConflict({ col: inc.col, id: inc.id, title: inc.title, fields: [], winner: 'pc-host', loser: 'phone' })
+    // blocked 是「本地版本已被服务端判定过期」的标记，此时必须让远端版本落地，
+    // 否则本地那条既不会重试、也永远等不到覆盖
+    if (local && local.dirty && !local.blocked && local.hlc && local.hlc > inc.hlc) continue
+    if (local && local.dirty && !local.blocked && local.hlc !== inc.hlc) {
+      addConflict({
+        col: inc.col,
+        id: inc.id,
+        title: inc.title,
+        fields: diffFields(local, inc),
+        winner: 'pc-host',
+        loser: 'phone',
+      })
     }
-    const rec = Object.assign({}, inc, { dirty: 0 })
+    const rec = Object.assign({}, inc, { dirty: 0, blocked: 0 })
     if (local) Object.assign(local, rec)
     else S.records.push(rec)
     ops.push({ type: 'put', value: rec })
@@ -407,6 +518,7 @@ export async function pair(host, code, deviceName) {
   await saveMeta('proto', res.proto || 2)
   await saveMeta('lastSeq', 0)
   setStatus('online', '已连接')
+  connectStream()
   await pullSnapshot()
   await syncNow('pair')
   return res
@@ -427,10 +539,18 @@ export async function boot() {
   })
   setStatus(S.meta.token ? 'offline' : 'offline', S.meta.token ? '离线' : '未配对')
   emit()
-  if (S.meta.token) syncNow('boot')
+  if (S.meta.token) {
+    connectStream()
+    syncNow('boot')
+  }
 
+  let tick = 0
   setInterval(() => {
     if (document.hidden) return
-    if (S.status !== 'syncing') syncNow('tick')
+    if (S.status === 'syncing') return
+    tick++
+    // SSE 正常时把兜底轮询从 30 秒放宽到 120 秒；断线立刻回到 30 秒
+    if (S.streamOk && tick % 4 !== 0) return
+    syncNow('tick')
   }, 30000)
 }

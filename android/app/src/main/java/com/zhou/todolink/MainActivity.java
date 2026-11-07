@@ -251,7 +251,15 @@ public class MainActivity extends Activity {
             pool.shutdownNow();
         }
 
-        private void emit(final String js) {
+        /**
+         * 回调页面。收敛成「单入口 + 一个 JSON 字符串」：
+         * 所有参数先序列化成 JSON，再由 JSONObject.quote 包成 JS 字面量，
+         * 页面侧统一 JSON.parse 后分发。
+         * 不再把多段用户数据直接拼进 JS 源码——那是最容易被构造出越界语法的写法。
+         */
+        private void emit(String fn, JSONObject payload) {
+            final String json = payload == null ? "{}" : payload.toString();
+            final String js = "try{window.__nativeEmit(" + q(fn) + "," + q(json) + ")}catch(e){}";
             webView.post(() -> {
                 try {
                     webView.evaluateJavascript(js, null);
@@ -267,6 +275,22 @@ public class MainActivity extends Activity {
             } catch (Throwable e) {
                 return "\"\"";
             }
+        }
+
+        /**
+         * 回调载荷：一次构造完，内部吞掉 JSONException（受检异常不方便在调用点逐处处理）。
+         * 用法：payload(reqId, "code", 500, "body", text)
+         */
+        private static JSONObject payload(String id, Object... kv) {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("id", id == null ? "" : id);
+                for (int i = 0; i + 1 < kv.length; i += 2) {
+                    o.put(String.valueOf(kv[i]), kv[i + 1]);
+                }
+            } catch (Throwable ignore) {
+            }
+            return o;
         }
 
         private static String readAll(InputStream is) {
@@ -321,25 +345,25 @@ public class MainActivity extends Activity {
                     int code = c.getResponseCode();
                     if (code >= 400) {
                         String text = readAll(c.getErrorStream());
-                        emit("window.__httpError(" + q(reqId) + "," + code + "," + q(text) + ")");
+                        emit("error", payload(reqId, "code", code, "body", text));
                         return;
                     }
 
                     InputStream is = c.getInputStream();
                     if (is == null) {
-                        emit("window.__httpError(" + q(reqId) + "," + code + "," + q("空响应") + ")");
+                        emit("error", payload(reqId, "code", code, "body", "空响应"));
                         return;
                     }
                     BufferedReader r = new BufferedReader(new InputStreamReader(is, "UTF-8"));
                     char[] buf = new char[1200];
                     int n;
                     while ((n = r.read(buf)) > 0) {
-                        emit("window.__httpChunk(" + q(reqId) + "," + q(new String(buf, 0, n)) + ")");
+                        emit("chunk", payload(reqId, "text", new String(buf, 0, n)));
                     }
-                    emit("window.__httpDone(" + q(reqId) + ")");
+                    emit("done", payload(reqId));
                 } catch (Throwable e) {
                     String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                    emit("window.__httpError(" + q(reqId) + ",0," + q(msg) + ")");
+                    emit("error", payload(reqId, "code", 0, "body", msg));
                 } finally {
                     live.remove(reqId);
                     if (c != null) {
@@ -439,7 +463,13 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String appVersion() {
-            return "2.7.0";
+            // 读真实包信息，不再硬编码：以前写死 "2.7.0"，APK 升到 2.9.0 后仍然上报 2.7.0
+            try {
+                return ctx.getPackageManager()
+                        .getPackageInfo(ctx.getPackageName(), 0).versionName;
+            } catch (Throwable e) {
+                return "";
+            }
         }
 
         @JavascriptInterface
