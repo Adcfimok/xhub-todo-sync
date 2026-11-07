@@ -14,7 +14,8 @@
     "android-apk-2.9.1",
     "android-apk-2.9.2",
     "android-apk-2.10.0",
-    "android-apk-2.11.0"
+    "android-apk-2.11.0",
+    "android-apk-2.11.1"
   ],
   "results": [
     {
@@ -96,12 +97,12 @@
       "file": "dist/com.zhou.todo-relay-2.2.3.zip",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 73175,
       "sha256": "8e4cb176b0668ebd98f59384dc2fa3a1160dc3a59b1fd36d8342a3b9eda9428d",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v2.2.3/com.zhou.todo-relay-2.2.3.zip",
-      "uploadedAt": "2026-11-07T13:02:36.039Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "xhub-ext-v2.2.3",
       "commit": "589170fc9db8a094ddc88c5eb5826598a4f720d3",
       "notes": "# 扩展 2.2.3\n\n只做一件事：让待办的「提醒提前量」能跨设备同步。\n\n## 改动\n\n- `service/store.js` 的 `todos` 归一化新增 `remindLead`：`-1` 关闭、`0` 准时、正数 = 提前分钟；`>525600`（一年）按一年钳制。\n- 同一处 `fromHostRow` 增加 `remindLead` / `remind_lead` 的读取，PC 端行导入不会把它丢掉。\n- `remindAt`（绝对时刻）沿用 2.2.2 的字段，两字段配合：预设走 `remindLead`，自定义时刻走 `remindAt`。\n\n## 为什么不能只存在手机本地\n\n提醒设置属于用户数据，重装或换机后要能恢复；只在本地存 `remindLead`，一旦重新配对就会被服务端归一化掉，用户会看到「提醒设置莫名消失」。\n\n## 兼容性\n\n- 老版本扩展不认这个字段会丢弃它，但不会报错；手机端仍按本地记录提醒。\n- 反向兼容：没有 `remindLead` 的老记录，手机端继续按「提前 15 分钟」处理。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/e2e.mjs        # 41 项\nnode tests/security.mjs   # 28 项\nnode --experimental-default-type=module --test android/tests/remind.test.mjs   # 含服务端字段保留断言\n```\n\n## 产物\n\n- `com.zhou.todo-relay-2.2.3.zip`，73,175 字节，14 个文件\n- SHA-256 `8e4cb176b0668ebd98f59384dc2fa3a1160dc3a59b1fd36d8342a3b9eda9428d`",
@@ -222,23 +223,41 @@
       "file": "android/todo-link-2.11.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 220370,
       "sha256": "cb7bb2472d49e7499175c1d5aaa9f84a193d21c511b2cceb1c8d9a5c30cc96ca",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.11.0/todo-link-2.11.0.apk",
-      "uploadedAt": "2026-11-07T13:02:39.390Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.11.0",
       "commit": "da16e8285f95db2a0b7b367d3534af36c9a53320",
       "notes": "# 安卓端 2.11.0（versionCode 17）\n\n本版一次性落地八项功能需求，并按 `docs/12` 修掉「多工具调用中断」。\n\n## 底栏交互\n\n- **移除拖动时的炫彩光效**：删掉高亮块 `::before` 的 `conic-gradient` 与模糊遮罩，只保留跟手放大（拖动 0→15%，切页脉冲 1.14 倍）与轻微趋圆。\n- 位移与缩放仍是两层 transform，老 WebView 降级只丢动效、不丢布局。\n\n## 待办提醒时间\n\n- 新建/编辑待办新增「提醒时间」预设：不提醒 / 准时 / 提前 15 分钟 / 30 分钟 / 1 小时 / 1 天 / 3 天 / 7 天 / 自定义（`datetime-local`）。\n- 记录写入 `remindLead`（-1 关闭、0 准时、正数=提前分钟）与 `remindAt`（绝对时刻）。服务端 `todos` 白名单同步新增 `remindLead`，PC 端可读、跨设备一致。\n- 没有截止日期时选「提前」会明确降级为不提醒并提示，不会静默存一条永远不响的记录。\n- 待办行显示 `⏰ 提前 1 天` 之类标记；老记录无提醒字段时仍按历史的「提前 15 分钟」执行。\n\n## 强提醒（通知 + 震动 + 弹窗 + 系统闹钟）\n\n- 新增高优先级渠道「强提醒（闹钟）」，与普通「待办提醒」分开，可单独静音。\n- 前台：应用内弹窗（稍后 10 分钟 / 标记完成），队列最多 3 条，避免批量提醒叠面板。\n- 后台/息屏：`AlarmManager` 精确闹钟 + `AlarmReceiver` 发通知并震动；未授予精确闹钟权限时退化为 `setAndAllowWhileIdle`，宁可晚几分钟也不静默不响。\n- 只排未来最近的 3 条，固定 requestCode 覆盖式调度，不会越积越多。\n\n## 笔记 / 速达 / 提示词\n\n- 三页都补了页面内「＋ 新建」按钮（笔记已移出底栏，不能只靠底部加号）。\n- 速达的编辑入口从 `oncontextmenu`（Android WebView 不派发）改为卡片右上角「⋯」，表单内可删除。\n- 提示词卡片补「编辑」按钮，并修掉缺少 `writeClipboard` 导入导致复制直接抛错的问题。\n\n## 番茄钟自定义\n\n- 专注 1–180 分钟、休息 1–60 分钟可调，存 `meta.pomoCfg`。\n- 正在计时时修改会询问「按新时长重新开始 / 下一轮生效」，不会悄悄重置用户当前这一轮。\n- 到点提醒、下一轮时长、说明文案全部跟随配置。\n\n## 节日模块\n\n- 新增页面：传统节日（12 个，农历换算）、二十四节气（24 个）、外国节日（9 个，含按周次计算的感恩节/母亲节/父亲节与复活节）。\n- 农历换算移植自 x-hub 桌面端 `src/utils/lunar.ts` 的 1900–2100 位编码表；节气用世纪常数公式，页脚注明可能差 1 天。\n- 每条可「＋ 待办」：到期日 09:00、提前 1 天提醒；同一天同一节日不会重复添加。\n\n## 首页\n\n- **秒级时钟**：`HH:MM:SS`，用 `1005 - Date.now() % 1000` 对齐整秒，只改文本节点，不整页重渲染。\n- **每日一句**：内置 24 条本地语料（与桌面端 `quotes.ts` 同一批），按日期取一条、点击换下一条且不重复、支持自定义覆盖；渐变文字 + 出处。\n- **可自定义卡片**：4 列网格，卡片可拖动位置、拖右下角改大小、卡片库增删、一键恢复默认；增删后自动向上压实，不留大片空洞。\n- 卡片库把扩展同步的五个集合（todos/notes/stickies/resources/snippets）都列为可选卡片，并标注「来自扩展」。\n\n## AI 助手\n\n- 按 `docs/12`：`runAgent` 的循环从刚 push 的 `tool` 消息取 `tool_call_id`，一轮两个以上工具调用时第二轮必崩（`Cannot read properties of undefined (reading '1')`）。改为从局部 `assistantMsg` 取。\n- 顺带加固三类畸形响应：`tool_calls` 数组含 `null` 项、整包 `null`、只有 `usage` 的尾包。\n\n## 验证\n\n```\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 34 项\nnode _tools/home-check.mjs            # 56 项：时钟/名言/布局/节日/强提醒\nnode _tools/nav-v5-check.mjs          # 底栏 5 格与无光效断言\nnode _tools/navbar-check.mjs          # 5 视口悬浮几何\ncd extensions/todo-relay && node tests/e2e.mjs && node tests/security.mjs\n```\n\n## 产物\n\n- `todo-link-2.11.0.apk`，220,370 字节\n- SHA-256 `cb7bb2472d49e7499175c1d5aaa9f84a193d21c511b2cceb1c8d9a5c30cc96ca`\n- 签名证书 SHA-256 `0be758eb…620ab`（与 2.9.x / 2.10.0 一致，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.11.0"
+    },
+    {
+      "id": "android-apk-2.11.1",
+      "version": "2.11.1",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.11.1.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 220370,
+      "sha256": "263c02d9bc48eb842e917e230ad909cee364df15c8e585d6d6310222d2381218",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.11.1/todo-link-2.11.1.apk",
+      "uploadedAt": "2026-11-07T13:42:10.762Z",
+      "tag": "android-v2.11.1",
+      "commit": "6de7a36c7ddd0af880a1c8379df61f4bd2d9a405",
+      "notes": "# 安卓端 2.11.1（versionCode 18）\n\n2.11.0 的排版修正版，功能与 2.11.0 完全一致，只改了三处视觉问题。\n\n## 修了什么\n\n| 问题 | 现象 | 修法 |\n| --- | --- | --- |\n| 节日页日期折行 | 日期列 62px 放不下「11 月 7 日」，被折成「11 月 7 / 日」两行，整行看着像错位 | 日期改成紧凑格式 `11/7`（跨年显示 `27/1/5`），列宽收到 56px 且禁止折行 |\n| 统计卡内容被裁 | 卡片压到 1 行高（78px）时，正文需要 78px 而可用只有 52px，四个数字的标签被切掉一截 | 恢复 2 行高，并补一行「今天完成 N 件 · 已全部同步」把空间填满；四个格子用 `flex:1` 吃掉剩余高度 |\n| 日历卡底部空一块 | 6 行月历固定高度，卡片比内容高出约 65px | 日期格改 `grid-auto-rows: 1fr`，把富余高度平均分给每一行 |\n\n## 没改什么\n\n- 底栏、提醒、节日数据、AI 解析、番茄钟、名言、卡片拖拽逻辑全部未动。\n- 扩展仍为 2.2.3，无需更新。\n\n## 验证\n\n```\nnode _tools/home-check.mjs            # 56 项（含节日页、统计卡、拖动/缩放/卡片库、强提醒）\nnode _tools/nav-v5-check.mjs          # 底栏回归\nnode _tools/navbar-check.mjs          # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 34 项\n```\n\n三张截图人工核对：浅色首页（统计卡不再裁切、日历填满）、节日页（日期单行）、编辑态（抓手与手柄可见）。\n\n## 产物\n\n- `todo-link-2.11.1.apk`，220,370 字节\n- SHA-256 `263c02d9bc48eb842e917e230ad909cee364df15c8e585d6d6310222d2381218`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.11.1"
     }
   ],
   "counts": {
-    "total": 12,
-    "success": 2,
+    "total": 13,
+    "success": 1,
     "failed": 0,
-    "skipped": 10,
+    "skipped": 12,
     "unprocessed": 0
   },
   "failure": null,
@@ -246,6 +265,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T13:02:33.024Z",
-  "finishedAt": "2026-11-07T13:02:39.391Z"
+  "startedAt": "2026-11-07T13:42:05.104Z",
+  "finishedAt": "2026-11-07T13:42:10.762Z"
 }
