@@ -53,6 +53,9 @@ function startClock() {
     if (el) el.textContent = hhmmss(new Date())
     const dateEl = document.getElementById('home-date')
     if (dateEl) dateEl.textContent = dateText(new Date())
+    // 问好与时间同一行，跨过 6/11/14/18 点就该跟着变，不能等下次整页渲染
+    const greetEl = document.getElementById('home-greet')
+    if (greetEl) greetEl.textContent = greeting()
     clockTimer = setTimeout(tick, 1005 - (Date.now() % 1000))
   }
   tick()
@@ -123,8 +126,11 @@ function hero(openTodos, today) {
         },
       }),
     ]),
-    h('div', { class: 'hero-time', id: 'home-clock', text: hhmmss(new Date()) }),
-    h('div', { class: 'hero-t', text: greeting() }),
+    // 时间与问好同一行：大号时钟 + 小一号的问好，按基线对齐
+    h('div', { class: 'hero-line' }, [
+      h('div', { class: 'hero-time', id: 'home-clock', text: hhmmss(new Date()) }),
+      h('div', { class: 'hero-t', id: 'home-greet', text: greeting() }),
+    ]),
     h('div', {
       class: 'hero-s',
       text: openTodos.length
@@ -147,7 +153,7 @@ function gridNode() {
           ? h('button', { class: 'hc-drag', type: 'button', text: '⋮⋮', 'aria-label': '拖动' })
           : null,
         h('span', { class: 'hc-title', text: def.title }),
-        def.route && !editing
+        def.route && !editing && !def.tap
           ? h('button', { class: 'mini hc-more', type: 'button', text: '全部', onclick: () => go(def.route) })
           : null,
         editing
@@ -166,6 +172,21 @@ function gridNode() {
       h('div', { class: 'hc-body' }, renderCard(item.id)),
       editing ? h('span', { class: 'hc-resize', 'aria-label': '调整大小' }) : null,
     ])
+    // 统计卡整张可点：手机上比「全部」小按钮好按得多
+    if (def.tap) {
+      node.classList.add('hc-tap')
+      if (!editing) {
+        node.setAttribute('role', 'button')
+        node.setAttribute('tabindex', '0')
+        node.addEventListener('click', () => go(def.route))
+        node.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            go(def.route)
+          }
+        })
+      }
+    }
     node.style.gridColumn = item.x + 1 + ' / span ' + item.w
     node.style.gridRow = item.y + 1 + ' / span ' + item.h
     if (editing) {
@@ -337,8 +358,6 @@ function renderCard(id) {
   switch (id) {
     case 'quote':
       return cardQuote()
-    case 'stats':
-      return cardStats()
     case 'calendar':
       return cardCalendar()
     case 'today':
@@ -356,6 +375,7 @@ function renderCard(id) {
     case 'holidays':
       return cardHolidays()
     default:
+      if (id.indexOf('stat:') === 0) return cardStat(id)
       return h('p', { class: 'muted', text: '未知卡片' })
   }
 }
@@ -420,25 +440,23 @@ function editQuote() {
   document.body.appendChild(mask)
 }
 
-function cardStats() {
-  const notes = colRecords('notes').filter((x) => !x.deleted)
-  const res = colRecords('resources').filter((x) => !x.deleted)
-  const snips = colRecords('snippets').filter((x) => !x.deleted)
-  const open = colRecords('todos').filter((t) => !t.deleted && !t.done)
-  // 今天完成的数量：给统计卡一点「活着」的信息，也把 2 行高度填满
-  const todayDone = colRecords('todos').filter((t) => !t.deleted && t.done && t.completedAt && dayDiff(t.completedAt) === 0).length
-  const pending = S.records.filter((r) => r.dirty).length
-  return h('div', { class: 'hc-stats' }, [
-    h('div', { class: 'stat-grid' }, [
-      stat('待办', open.length, 'todos'),
-      stat('笔记', notes.length, 'notes'),
-      stat('速达', res.length, 'resources'),
-      stat('提示词', snips.length, 'snippets'),
-    ]),
-    h('div', {
-      class: 'hc-hint',
-      text: '今天完成 ' + todayDone + ' 件' + (pending ? ' · ' + pending + ' 条待同步' : ' · 已全部同步'),
-    }),
+function cardStat(id) {
+  // id 形如 stat:todos，去掉前缀就是集合名
+  const col = id.slice(5)
+  const all = colRecords(col)
+  const list = col === 'todos' ? all.filter((t) => !t.done) : all
+  let sub = ''
+  if (col === 'todos') {
+    const due = list.filter((t) => t.dueAt && dayDiff(t.dueAt) <= 0).length
+    const done = all.filter((t) => t.done && t.completedAt && dayDiff(t.completedAt) === 0).length
+    sub = due > 0 ? '今天到期 ' + due + ' 件' : done > 0 ? '今天完成 ' + done + ' 件' : '今天没有到期的'
+  } else if (col === 'notes') sub = '条笔记'
+  else if (col === 'resources') sub = '个入口'
+  else sub = '条话术'
+  return h('div', { class: 'hc-stat' }, [
+    h('b', { class: 'hs-n', text: String(list.length) }),
+    h('span', { class: 'hs-d', text: sub }),
+    h('span', { class: 'hs-go', text: '›' }),
   ])
 }
 
@@ -610,13 +628,6 @@ function greeting() {
   if (hh < 14) return '中午好'
   if (hh < 18) return '下午好'
   return '晚上好'
-}
-
-function stat(label, n, route) {
-  return h('button', { class: 'stat', type: 'button', onclick: () => go(route) }, [
-    h('b', { text: String(n) }),
-    h('span', { text: label }),
-  ])
 }
 
 function go(route) {

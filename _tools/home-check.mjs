@@ -113,7 +113,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.11.0',
+      appVersion: () => '2.12.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -135,8 +135,51 @@ for (const v of VIEWPORTS) {
 
   // ---------- 2. 卡片渲染 ----------
   const cards = await page.$$eval('.home-grid .hc', (els) => els.map((e) => e.getAttribute('data-card')))
-  check(`${v.name} 默认 7 张卡片`, cards.length === 7, cards.join(','))
-  check(`${v.name} 含名言/统计/日历/节日`, ['quote', 'stats', 'calendar', 'holidays'].every((id) => cards.includes(id)), cards.join(','))
+  check(`${v.name} 默认 10 张卡片`, cards.length === 10, cards.join(','))
+  check(
+    `${v.name} 含名言/统计四卡/日历/节日`,
+    ['quote', 'stat:todos', 'stat:notes', 'stat:resources', 'stat:snippets', 'calendar', 'holidays'].every((id) => cards.includes(id)),
+    cards.join(',')
+  )
+
+  // 统计四卡与「每日一句」必须同宽同高（本次改动的核心验收点）
+  const geo = await page.evaluate(() => {
+    const rect = (sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 }
+    }
+    const q = rect('.hc[data-card="quote"]')
+    const stats = ['stat:todos', 'stat:notes', 'stat:resources', 'stat:snippets'].map((id) => ({
+      id,
+      ...rect(`.hc[data-card="${id}"]`),
+    }))
+    return { q, stats }
+  })
+  check(
+    `${v.name} 统计卡与每日一句同宽同高`,
+    !!geo.q && geo.stats.every((s) => s && Math.abs(s.w - geo.q.w) < 1 && Math.abs(s.h - geo.q.h) < 1),
+    `quote ${geo.q && geo.q.w}×${geo.q.h} / ` + geo.stats.map((s) => `${s.id}:${s.w}×${s.h}`).join(' ')
+  )
+
+  // 时间与问好必须落在同一行：水平相邻 + 垂直重叠
+  const heroGeo = await page.evaluate(() => {
+    const t = document.getElementById('home-clock').getBoundingClientRect()
+    const g = document.getElementById('home-greet').getBoundingClientRect()
+    const line = document.querySelector('.hero-line').getBoundingClientRect()
+    return { t: { l: t.left, r: t.right, t: t.top, b: t.bottom }, g: { l: g.left, r: g.right, t: g.top, b: g.bottom }, line: { r: line.right, b: line.bottom } }
+  })
+  check(
+    `${v.name} 时间与问好同一行`,
+    heroGeo.g.l >= heroGeo.t.r - 1 && heroGeo.g.t < heroGeo.t.b - 4 && heroGeo.g.b > heroGeo.t.t + 4,
+    `clock ${Math.round(heroGeo.t.l)}→${Math.round(heroGeo.t.r)} / greet ${Math.round(heroGeo.g.l)}→${Math.round(heroGeo.g.r)}`
+  )
+  check(
+    `${v.name} 问好未溢出容器`,
+    heroGeo.g.r <= heroGeo.line.r + 0.5,
+    `greet.right ${Math.round(heroGeo.g.r)} / line.right ${Math.round(heroGeo.line.r)}`
+  )
 
   const quote = await page.textContent('.hq-text')
   const from = await page.textContent('.hc-quote-from')
@@ -184,7 +227,7 @@ for (const v of VIEWPORTS) {
 
   const moved = await readLayout(page)
   const item = moved && moved.items.filter((i) => i.id === dragCard)[0]
-  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 10, JSON.stringify(item))
+  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 12, JSON.stringify(item))
 
   // ---------- 4. 缩放 ----------
   // 笔记卡 2 宽、最小 2：向右拖一格加到 3 宽（位置可能被顺延，宽度必须变）
@@ -211,7 +254,7 @@ for (const v of VIEWPORTS) {
   await page.waitForTimeout(300)
   const libRows = await page.$$eval('.lib-row', (els) => els.length)
   const libTags = await page.$$eval('.lib-tag', (els) => els.map((e) => e.textContent))
-  check(`${v.name} 卡片库列出全部卡片`, libRows === 10, String(libRows))
+  check(`${v.name} 卡片库列出全部卡片`, libRows === 13, String(libRows))
   check(`${v.name} 扩展五个集合标注来源`, libTags.length === 5, libTags.join(','))
 
   if (shots) {
@@ -224,7 +267,7 @@ for (const v of VIEWPORTS) {
   await page.click('.hc[data-card="quote"] .hc-del')
   await page.waitForTimeout(350)
   const afterRemove = await page.$$eval('.home-grid .hc', (els) => els.length)
-  check(`${v.name} 移除卡片生效`, afterRemove === 6, String(afterRemove))
+  check(`${v.name} 移除卡片生效`, afterRemove === 9, String(afterRemove))
   await page.click('.editbar .btn:nth-of-type(1)')
   await page.waitForTimeout(300)
   const addBtn = await page.$('.lib-row:last-child .btn')
@@ -262,7 +305,106 @@ for (const v of VIEWPORTS) {
   await ctx.close()
 }
 
-// ---------- 7. 强提醒：到点弹窗 + 系统通知 ----------
+// ---------- 7. 我的：一键添加所有节日 ----------
+function readBulk(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const req = indexedDB.open('todolink', 2)
+        req.onsuccess = () => {
+          const g = req.result.transaction('meta', 'readonly').objectStore('meta').get('holidayBulk')
+          g.onsuccess = () => resolve(g.result ? g.result.v : null)
+          g.onerror = () => resolve(null)
+        }
+        req.onerror = () => resolve(null)
+      })
+  )
+}
+
+async function readTodos(page) {
+  const all = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const req = indexedDB.open('todolink', 2)
+        req.onsuccess = () => {
+          const g = req.result.transaction('records', 'readonly').objectStore('records').getAll()
+          g.onsuccess = () => resolve(g.result || [])
+          g.onerror = () => resolve([])
+        }
+        req.onerror = () => resolve([])
+      })
+  )
+  return all.filter((r) => r.col === 'todos' && !r.deleted)
+}
+
+async function waitBulk(page, pred, timeout = 20000) {
+  const t0 = Date.now()
+  for (;;) {
+    const v = await readBulk(page)
+    if (pred(v)) return v
+    if (Date.now() - t0 > timeout) return v
+    await page.waitForTimeout(120)
+  }
+}
+
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  const page = await ctx.newPage()
+  const errors = []
+  page.on('pageerror', (e) => errors.push(String(e.message || e)))
+  page.on('console', (m) => {
+    if (m.type() === 'error' && !/Failed to load resource/i.test(m.text())) errors.push(m.text())
+  })
+  await page.addInitScript(() => {
+    window.Android = {
+      originPort: () => 47830,
+      appVersion: () => '2.12.0',
+      deviceName: () => 'test',
+      readClipboard: () => '',
+      writeClipboard: () => {},
+      vibrate: () => {},
+      toast: () => {},
+      openUrl: () => {},
+    }
+  })
+  await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(800)
+  await page.evaluate(() => (location.hash = '#/more'))
+  await page.waitForTimeout(500)
+
+  const rowText = (await page.textContent('.menu-sub')) || ''
+  check('我的页出现「一键添加所有节日」', /一键添加所有节日/.test(rowText), rowText.replace(/\s+/g, ' ').slice(0, 70))
+  check('开关位于「节日」条目下方', (await page.$('.menu-item.no-sep + .menu-sub')) !== null)
+
+  const before = (await readTodos(page)).length
+  await page.click('.menu-sub .toggle')
+  await waitBulk(page, (v) => !!(v && v.ids && v.ids.length))
+  const after = (await readTodos(page)).length
+  const bulk = await readBulk(page)
+  check('勾选后批量写入节日待办', after - before >= 30, `${before} → ${after}`)
+  check('批量 id 全部落盘', !!(bulk && bulk.ids && bulk.ids.length === after - before), bulk && String(bulk.ids.length))
+  check('开关保持勾选', (await page.isChecked('.menu-sub .toggle input')) === true)
+  const subOn = (await page.textContent('.menu-sub .switch-sub')) || ''
+  check('开关下方显示已加条数', /已批量加入 \d+ 条/.test(subOn), subOn)
+
+  // 取消勾选：先确认，再只删这一批
+  await page.click('.menu-sub .toggle')
+  await page.waitForTimeout(350)
+  const danger = await page.$('.modal-btns .btn.danger')
+  check('取消勾选先弹确认框', danger !== null)
+  if (danger) await danger.click()
+  await waitBulk(page, (v) => !v || !v.ids || !v.ids.length)
+  await page.waitForTimeout(500)
+  const restored = (await readTodos(page)).length
+  check('确认后批量待办被移除', restored === before, `${after} → ${restored}`)
+  check('开关回到未勾选', (await page.isChecked('.menu-sub .toggle input')) === false)
+  check('我的页无脚本错误', errors.length === 0, errors.slice(0, 3).join(' | '))
+
+  if (shots) await page.screenshot({ path: path.join(HERE, `home-more-bulk-${dark ? 'dark' : 'light'}.png`) })
+  await ctx.close()
+}
+
+// ---------- 8. 强提醒：到点弹窗 + 系统通知 ----------
 // 单独开一个上下文：写入一条「1 分钟前就该提醒」的待办，重载后由 initAlerts 的首次 sweep 触发
 {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
@@ -274,7 +416,7 @@ for (const v of VIEWPORTS) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.11.0',
+      appVersion: () => '2.12.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},

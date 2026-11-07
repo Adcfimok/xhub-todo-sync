@@ -165,7 +165,8 @@ try {
     check(
       d.name,
       '内容不被遮',
-      home.lastContentBottom === null || home.lastContentBottom <= home.dock.top - 20,
+      // 留白按 20px 设计；scrollTop 在高 DPR 下按 0.5px 取整，最后一块可能差 0.2~0.5px，故留 1px 容差
+      home.lastContentBottom === null || home.lastContentBottom <= home.dock.top - 19,
       `末块内容底边 ${home.lastContentBottom?.toFixed(1)}，胶囊上沿 ${home.dock.top.toFixed(1)}`,
     );
     check(d.name, '提示条不与底栏重叠', home.toast.bottom <= home.dock.top - 8, `提示条底边 ${home.toast.bottom.toFixed(1)}，胶囊上沿 ${home.dock.top.toFixed(1)}`);

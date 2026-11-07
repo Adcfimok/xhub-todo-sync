@@ -8,9 +8,9 @@ export const DB_VER = 2
 export const APP_VER = (function () {
   try {
     const v = window.Android && window.Android.appVersion && window.Android.appVersion()
-    return (v && String(v)) || '2.11.1'
+    return (v && String(v)) || '2.12.0'
   } catch (e) {
-    return '2.11.1'
+    return '2.12.0'
   }
 })()
 

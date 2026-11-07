@@ -205,17 +205,17 @@ try {
     await page.waitForTimeout(420);
     entries.push({ name: '「我的」菜单', ok: moreOk.found && (await page.evaluate(() => location.hash)) === '#/notes' });
 
-    // 4b 首页统计格
+    // 4b 首页统计卡（2.12.0 起四张统计各占一张卡，整卡可点）
     await page.evaluate(() => (location.hash = '#/home'));
     await page.waitForTimeout(400);
     const statOk = await page.evaluate(() => {
-      const hit = [...document.querySelectorAll('.stat')].find((el) => (el.textContent || '').includes('笔记'));
+      const hit = document.querySelector('.hc[data-card="stat:notes"]');
       if (!hit) return { found: false };
       hit.click();
       return { found: true };
     });
     await page.waitForTimeout(420);
-    entries.push({ name: '首页统计格', ok: statOk.found && (await page.evaluate(() => location.hash)) === '#/notes' });
+    entries.push({ name: '首页统计卡', ok: statOk.found && (await page.evaluate(() => location.hash)) === '#/notes' });
 
     // 4c 首页「最近笔记 → 全部」
     await page.evaluate(() => (location.hash = '#/home'));
