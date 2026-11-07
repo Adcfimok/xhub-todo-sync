@@ -118,6 +118,12 @@
       "version": "2.12.3",
       "kind": "android-apk",
       "file": "android/todo-link-2.12.3.apk"
+    },
+    {
+      "id": "android-apk-2.12.4",
+      "version": "2.12.4",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.12.4.apk"
     }
   ]
 }
