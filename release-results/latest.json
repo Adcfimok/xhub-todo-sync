@@ -17,7 +17,8 @@
     "android-apk-2.11.0",
     "android-apk-2.11.1",
     "android-apk-2.12.0",
-    "android-apk-2.12.1"
+    "android-apk-2.12.1",
+    "android-apk-2.12.2"
   ],
   "results": [
     {
@@ -279,23 +280,41 @@
       "file": "android/todo-link-2.12.1.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 224466,
       "sha256": "2a97e26d9b52e49085f3958c1f4fdf32b8a5ee55a87a651c6c3061bc1755b94e",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.1/todo-link-2.12.1.apk",
-      "uploadedAt": "2026-11-07T14:52:39.779Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.12.1",
       "commit": "7ec229aa99f0417d76f959bd7d53e6c8405a9dd7",
       "notes": "# 安卓端 2.12.1（versionCode 20）\n\n按反馈回退 2.12.0 的卡片改动：统计恢复成一张 4×2 卡片里的四宫格，其余两项（时间与问好同行、节日一键添加）保留。\n\n## 改了什么\n\n| 位置 | 2.12.0 | 2.12.1 |\n| --- | --- | --- |\n| 首页统计 | 拆成四张 4×1 卡片，纵向占 4 行（约 342px） | 回退为一张 4×2「统计」卡，四个数字横向排一行，底部仍是「今天完成 N 件 · 已全部同步」 |\n| 整卡点击 | 统计卡整张可点 | 恢复成四宫格里的小按钮，各自跳转 |\n| 卡片库 | 10 → 13 项 | 回到 10 项，与 2.11.1 一致 |\n\n保留未动：\n\n- **时间与问好同一行**（2.12.0 新增）：时钟 38px + 问好 18px 基线对齐，跨时段自动更新。\n- **我的 → 节日 → 一键添加所有节日**（2.12.0 新增）：批量写待办 / 一键撤回。\n\n## 升级说明\n\n- 已经装过 2.12.0 的机器，本地存的是四张统计卡的布局。2.12.1 读取时会自动合并回一张「统计」卡，落在第一张统计卡原来的位置，日历等卡片顺延，不会出现「统计整块消失」或空洞。\n- 只删过其中一两张统计卡的，也会按剩下的合并成一张，不会重复。\n- 合并是幂等的：再次读写不会多卡；`android/tests/home-layout.test.mjs` 覆盖了这几种情况。\n\n## 验证\n\n```\nnode _tools/home-check.mjs                                              # 75 项（统计卡断言改为「单张四宫格 + 无 stat:* 残留」）\nnode _tools/nav-v5-check.mjs                                            # 底栏 + 三处笔记入口（统计格按钮）\nnode _tools/navbar-check.mjs                                            # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs # 42 项（home-layout 8 项：合并迁移/幂等/minH/增删）\n```\n\n首页截图（360/390/430，浅色 + 暗色）与 2.11.1 的统计卡逐像素一致，仅首屏时间行不同。\n\n## 产物\n\n- `todo-link-2.12.1.apk`，224,466 字节\n- SHA-256 `2a97e26d9b52e49085f3958c1f4fdf32b8a5ee55a87a651c6c3061bc1755b94e`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.12.1"
+    },
+    {
+      "id": "android-apk-2.12.2",
+      "version": "2.12.2",
+      "kind": "android-apk",
+      "file": "android/todo-link-2.12.2.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 224466,
+      "sha256": "528b378a1d3f762f48ce0852b5439c25c275314200bf4089e6278f024b551adc",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.2/todo-link-2.12.2.apk",
+      "uploadedAt": "2026-11-07T15:10:13.505Z",
+      "tag": "android-v2.12.2",
+      "commit": "6d70497344718bd348f2c3b8632286945161a138",
+      "notes": "# 安卓端 2.12.2（versionCode 21）\n\n统计卡改成和「每日一句」同尺寸：同为 4 列 × 1 行，上下沿对齐、宽高一致；四个统计数字一个不少，全部完整显示。\n\n## 改了什么\n\n| 项 | 2.12.1 | 2.12.2 |\n| --- | --- | --- |\n| 统计卡尺寸 | 4×2（326×166 @390） | 4×1（326×78 @390），与「每日一句」逐像素一致 |\n| 四个数字 | 竖排大格（数字 19px + 标签 11px，格高约 62px） | 横排紧凑格（数字 18px + 标签 10.5px，格高 48px），一个都不少 |\n| 卡片脚注 | 「今天完成 N 件 · 已全部同步」占一行 | 挪到卡片头右侧小字「今天完成 N 件」，不再占正文高度 |\n| 卡片库 | 10 项 | 不变 |\n\n四格之所以在 78px 内放得下：卡片内边距收到 `2px 10px 5px`、格子内边距 4px、数字 18px/1.05、标签 10.5px/1.15，实测内容高 41px，可用 48px，留 7px 余量。\n\n## 老布局升级\n\n- 存过 2.11.x/2.12.1 布局的机器，统计卡是 2 行：载入时按「正好 2 行」收成 1 行，并回写为布局 v2，只算一次。\n- 自己把统计卡拉到 3 行以上的不动。\n- 装过 2.12.0（四张统计卡）的，先合并成一张再收成 1 行，日历等卡片顺延。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 78 项：新增「统计卡与每日一句同宽同高」「四个统计格完整不裁切」\nnode _tools/nav-v5-check.mjs    # 底栏 + 三处笔记入口\nnode _tools/navbar-check.mjs    # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 44 项\n```\n\n三档视口实测：360 → 统计 296×78 / 名言 296×78；390 → 326×78 / 326×78；430 → 366×78 / 366×78。\n裁切判定不是看截图，而是逐个格子比对「数字与标签的矩形是否落在格子内 + 格子有没有滚动溢出」，四格全部 ok；320 窄屏与手动缩到 3 列也复测过。\n\n## 产物\n\n- `todo-link-2.12.2.apk`，224,466 字节\n- SHA-256 `528b378a1d3f762f48ce0852b5439c25c275314200bf4089e6278f024b551adc`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
+      "releaseName": "待办同步 安卓端 v2.12.2"
     }
   ],
   "counts": {
-    "total": 15,
+    "total": 16,
     "success": 1,
     "failed": 0,
-    "skipped": 14,
+    "skipped": 15,
     "unprocessed": 0
   },
   "failure": null,
@@ -303,6 +322,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T14:52:34.685Z",
-  "finishedAt": "2026-11-07T14:52:39.779Z"
+  "startedAt": "2026-11-07T15:10:06.967Z",
+  "finishedAt": "2026-11-07T15:10:13.505Z"
 }
