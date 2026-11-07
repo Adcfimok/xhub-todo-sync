@@ -5,6 +5,8 @@
   --card: rgba(255, 255, 255, .06);
   --card-solid: #1c1d28;
   --line: rgba(255, 255, 255, .10);
+  /* 标签与按压反馈的「凹陷」底色：历史上被 var(--well) 引用却从未定义，等于全透明 */
+  --well: rgba(255, 255, 255, .07);
   --ink: #eceef4;
   --ink-2: #a3a9b8;
   --ink-3: #767d8d;
@@ -47,6 +49,7 @@
     --card: #ffffff;
     --card-solid: #ffffff;
     --line: rgba(20, 24, 40, .10);
+    --well: rgba(20, 24, 40, .055);
     --ink: #1b1d26;
     --ink-2: #565b6b;
     --ink-3: #8b90a0;
@@ -1726,7 +1729,9 @@ select.input { appearance: none; }
   padding: 4px 4px;
   border-radius: 10px;
   justify-content: center;
+  transition: transform .12s ease;
 }
+.hc-stats .stat:active { transform: scale(.97); }
 .hc-stats .stat b { font-size: 18px; line-height: 1.05; }
 .hc-stats .stat span {
   max-width: 100%;
@@ -1737,7 +1742,18 @@ select.input { appearance: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hc-meta { flex: none; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* 卡头右侧的小字：窄卡里让位给标题，超长省略而不是把卡片撑破 */
+.hc-meta {
+  flex: 0 1 auto;
+  max-width: 62%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
 
 /* 日历卡：把富余高度分给日期格，避免底部空一大块 */
 .hc-body .cal-card { display: flex; flex-direction: column; height: 100%; }

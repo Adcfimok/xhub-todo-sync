@@ -113,7 +113,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.3',
+      appVersion: () => '2.12.4',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -340,6 +340,13 @@ for (const v of VIEWPORTS) {
   const cats = await page.$$eval('.filterbar .chip', (els) => els.map((e) => e.textContent))
   check(`${v.name} 节日分类齐全`, cats.length === 4, cats.join(' | '))
 
+  // --well 是标签/按压反馈的底色 token，曾被引用却未定义（=全透明），这里守住
+  const tagBg = await page.evaluate(() => {
+    const el = document.querySelector('.hd-tag')
+    return el ? getComputedStyle(el).backgroundColor : null
+  })
+  check(`${v.name} 节日标签有底色（--well 已定义）`, !!tagBg && tagBg !== 'rgba(0, 0, 0, 0)', tagBg)
+
   await page.click('.filterbar .chip:nth-child(3)')
   await page.waitForTimeout(300)
   const termOnly = await page.$$eval('.holiday-row', (els) => els.length)
@@ -415,7 +422,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.3',
+      appVersion: () => '2.12.4',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -480,7 +487,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.3',
+      appVersion: () => '2.12.4',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -561,7 +568,7 @@ async function waitBulk(page, pred, timeout = 20000) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.3',
+      appVersion: () => '2.12.4',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},

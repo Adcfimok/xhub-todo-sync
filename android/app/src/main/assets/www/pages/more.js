@@ -1,4 +1,14 @@
-import { S, findRec, colRecords, newRecord, touch, softDelete, saveMeta } from '../lib/core.js'
+import {
+  S,
+  findRec,
+  colRecords,
+  newRecord,
+  saveMeta,
+  idbWrite,
+  emit,
+  scheduleSoon,
+  hlcNext,
+} from '../lib/core.js'
 import { h, toast, confirmAsync } from '../lib/ui.js'
 import { writeClipboard } from '../lib/native.js'
 import { holidaysInRange } from '../lib/holidays.js'
@@ -97,12 +107,26 @@ async function applyBulk(on, input) {
     busy = true
     input.disabled = true
     try {
+      // 一个事务删完：中途被打断也不会留下「删了一半」的状态
+      const ops = []
       for (let i = 0; i < ids.length; i++) {
         const r = findRec(ids[i])
-        if (r && !r.deleted) await softDelete(r)
+        if (!r || r.deleted) continue
+        r.deleted = true
+        r.updatedAt = Date.now()
+        r.hlc = hlcNext()
+        r.dirty = 1
+        ops.push({ type: 'put', value: r })
+      }
+      if (ops.length) {
+        await idbWrite(ops)
+        emit()
+        scheduleSoon()
       }
       await saveMeta(BULK_KEY, { ids: [], at: Date.now() })
       toast('已移除批量添加的 ' + ids.length + ' 条节日待办')
+    } catch (e) {
+      toast('删除失败，请重试')
     } finally {
       busy = false
     }
@@ -113,7 +137,7 @@ async function applyBulk(on, input) {
   const list = upcomingHolidays()
   const exist = colRecords('todos')
   const keep = []
-  let added = 0
+  const created = []
   busy = true
   input.disabled = true
   try {
@@ -138,12 +162,25 @@ async function applyBulk(on, input) {
         priority: 0,
         description: '节日 · ' + (x.note || '') + '（一键添加）',
       })
-      await touch(rec, {})
+      created.push(rec)
       keep.push(rec.id)
-      added++
+    }
+    // 50 多条一次性落盘：一条事务比 50 次串行写快，也不会出现「只加了一半」
+    if (created.length) {
+      await idbWrite(created.map((rec) => ({ type: 'put', value: rec })))
+      emit()
+      scheduleSoon()
     }
     await saveMeta(BULK_KEY, { ids: keep, at: Date.now() })
-    toast(added ? '已添加 ' + added + ' 条节日待办' : '这些节日都已经在待办里了')
+    toast(created.length ? '已添加 ' + created.length + ' 条节日待办' : '这些节日都已经在待办里了')
+  } catch (e) {
+    // 落盘失败就把内存里刚建的记录撤掉，别让界面和存档对不上
+    created.forEach((rec) => {
+      const at = S.records.indexOf(rec)
+      if (at >= 0) S.records.splice(at, 1)
+    })
+    emit()
+    toast('添加失败，请重试')
   } finally {
     busy = false
   }

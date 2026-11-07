@@ -10,11 +10,9 @@ import {
   cardDef,
   loadLayout,
   defaultLayout,
-  normalizeLayout,
   placeCard,
   addCard,
   removeCard,
-  missingCards,
   needsUpgrade,
   EXT_COLLECTIONS,
 } from '../lib/homeLayout.js'
