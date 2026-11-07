@@ -809,6 +809,14 @@ select.input { appearance: none; }
   text-overflow: ellipsis;
 }
 .hero-s { font-size: 13px; color: var(--ink-2); margin-top: 4px; }
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.stat {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 12px 10px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--card); cursor: pointer;
+}
+.stat b { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11.5px; color: var(--ink-3); }
 .banner {
   margin: 0 0 12px; padding: 10px 14px; border-radius: 12px;
   background: var(--pri-soft); color: var(--orange); font-size: 13px;
@@ -1701,7 +1709,6 @@ select.input { appearance: none; }
   .hero-time { font-size: 32px; }
   .hero-t { font-size: 15.5px; }
   .hc-big { font-size: 26px; }
-  .hs-n { font-size: 26px; }
 }
 
 .hc-more { flex: none; font-size: 11px; padding: 2px 7px; }
@@ -1710,30 +1717,20 @@ select.input { appearance: none; }
 .hd-date { width: 56px; }
 .hd-date b { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* 统计卡在 2 行高度里的排布（卡片内比整页更紧凑） */
+.hc-body .stat-grid { padding: 0; gap: 8px; }
+.hc-body .stat { padding: 6px 4px; border-radius: 10px; }
+.hc-body .stat b { font-size: 19px; line-height: 1.1; }
+.hc-body .stat span { font-size: 11px; margin-top: 1px; }
+
+/* 统计卡底部的补充信息 */
+.hc-hint { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); }
+
 /* 日历卡：把富余高度分给日期格，避免底部空一大块 */
 .hc-body .cal-card { display: flex; flex-direction: column; height: 100%; }
 .hc-body .cal-cells { flex: 1; grid-auto-rows: 1fr; }
 
-/* 统计卡：一张 4×1 卡片放一个数字，几何与「每日一句」完全一致 */
-.hc-tap { cursor: pointer; }
-.hc-tap:active { transform: scale(.994); }
-.hc-stat { display: flex; align-items: center; gap: 8px; height: 100%; padding-top: 1px; }
-.hs-n {
-  flex: none;
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -1px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-}
-.hs-d {
-  flex: 1;
-  min-width: 0;
-  font-size: 11.5px;
-  color: var(--ink-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hs-go { flex: none; font-size: 16px; line-height: 1; color: var(--ink-3); }
+/* 统计卡：让四个格子吃掉多余高度，不把空白留在底部 */
+.hc-stats { display: flex; flex-direction: column; height: 100%; }
+.hc-stats .stat-grid { flex: 1; grid-auto-rows: 1fr; }
+.hc-stats .stat { justify-content: center; }

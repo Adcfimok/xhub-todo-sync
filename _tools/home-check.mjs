@@ -113,7 +113,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.0',
+      appVersion: () => '2.12.1',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -135,32 +135,25 @@ for (const v of VIEWPORTS) {
 
   // ---------- 2. 卡片渲染 ----------
   const cards = await page.$$eval('.home-grid .hc', (els) => els.map((e) => e.getAttribute('data-card')))
-  check(`${v.name} 默认 10 张卡片`, cards.length === 10, cards.join(','))
+  check(`${v.name} 默认 7 张卡片`, cards.length === 7, cards.join(','))
   check(
-    `${v.name} 含名言/统计四卡/日历/节日`,
-    ['quote', 'stat:todos', 'stat:notes', 'stat:resources', 'stat:snippets', 'calendar', 'holidays'].every((id) => cards.includes(id)),
+    `${v.name} 含名言/统计/日历/节日`,
+    ['quote', 'stats', 'calendar', 'holidays'].every((id) => cards.includes(id)),
     cards.join(',')
   )
 
-  // 统计四卡与「每日一句」必须同宽同高（本次改动的核心验收点）
-  const geo = await page.evaluate(() => {
-    const rect = (sel) => {
-      const el = document.querySelector(sel)
-      if (!el) return null
-      const r = el.getBoundingClientRect()
-      return { w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 }
-    }
-    const q = rect('.hc[data-card="quote"]')
-    const stats = ['stat:todos', 'stat:notes', 'stat:resources', 'stat:snippets'].map((id) => ({
-      id,
-      ...rect(`.hc[data-card="${id}"]`),
-    }))
-    return { q, stats }
+  // 统计卡回到单张 4×2：四个数字仍在一个卡片里，且不能再出现拆开的 stat:* 卡
+  const statsGeo = await page.evaluate(() => {
+    const card = document.querySelector('.hc[data-card="stats"]')
+    if (!card) return null
+    const cells = [...card.querySelectorAll('.stat')]
+    const r = card.getBoundingClientRect()
+    return { w: Math.round(r.width), h: Math.round(r.height), cells: cells.length, split: document.querySelectorAll('[data-card^="stat:"]').length }
   })
   check(
-    `${v.name} 统计卡与每日一句同宽同高`,
-    !!geo.q && geo.stats.every((s) => s && Math.abs(s.w - geo.q.w) < 1 && Math.abs(s.h - geo.q.h) < 1),
-    `quote ${geo.q && geo.q.w}×${geo.q.h} / ` + geo.stats.map((s) => `${s.id}:${s.w}×${s.h}`).join(' ')
+    `${v.name} 统计卡为单张四宫格`,
+    !!statsGeo && statsGeo.cells === 4 && statsGeo.split === 0 && statsGeo.h > statsGeo.w / 4,
+    statsGeo ? `${statsGeo.w}×${statsGeo.h}，${statsGeo.cells} 格，拆分卡 ${statsGeo.split}` : '未找到统计卡'
   )
 
   // 时间与问好必须落在同一行：水平相邻 + 垂直重叠
@@ -227,7 +220,7 @@ for (const v of VIEWPORTS) {
 
   const moved = await readLayout(page)
   const item = moved && moved.items.filter((i) => i.id === dragCard)[0]
-  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 12, JSON.stringify(item))
+  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 10, JSON.stringify(item))
 
   // ---------- 4. 缩放 ----------
   // 笔记卡 2 宽、最小 2：向右拖一格加到 3 宽（位置可能被顺延，宽度必须变）
@@ -254,7 +247,7 @@ for (const v of VIEWPORTS) {
   await page.waitForTimeout(300)
   const libRows = await page.$$eval('.lib-row', (els) => els.length)
   const libTags = await page.$$eval('.lib-tag', (els) => els.map((e) => e.textContent))
-  check(`${v.name} 卡片库列出全部卡片`, libRows === 13, String(libRows))
+  check(`${v.name} 卡片库列出全部卡片`, libRows === 10, String(libRows))
   check(`${v.name} 扩展五个集合标注来源`, libTags.length === 5, libTags.join(','))
 
   if (shots) {
@@ -267,7 +260,7 @@ for (const v of VIEWPORTS) {
   await page.click('.hc[data-card="quote"] .hc-del')
   await page.waitForTimeout(350)
   const afterRemove = await page.$$eval('.home-grid .hc', (els) => els.length)
-  check(`${v.name} 移除卡片生效`, afterRemove === 9, String(afterRemove))
+  check(`${v.name} 移除卡片生效`, afterRemove === 6, String(afterRemove))
   await page.click('.editbar .btn:nth-of-type(1)')
   await page.waitForTimeout(300)
   const addBtn = await page.$('.lib-row:last-child .btn')
@@ -358,7 +351,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.0',
+      appVersion: () => '2.12.1',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -416,7 +409,7 @@ async function waitBulk(page, pred, timeout = 20000) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '2.12.0',
+      appVersion: () => '2.12.1',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
