@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-07T16:33:00.959Z",
+  "checkedAt": "2026-11-07T17:34:11.005Z",
   "counts": {
-    "total": 18,
-    "ok": 18,
+    "total": 20,
+    "ok": 20,
     "drift": 0,
     "warn": 0
   },
@@ -440,6 +440,54 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.4/todo-link-2.12.4.apk",
       "tagCommit": "13ef12a707e9bf26bef6ad9a27bef7ba3b0880de",
+      "issues": []
+    },
+    {
+      "id": "android-apk-3.0.0",
+      "version": "3.0.0",
+      "kind": "android-apk",
+      "tag": "android-v3.0.0",
+      "file": "android/todo-link-3.0.0.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 245092,
+        "sha256": "3ebaf3bf740a0e3224abac4055785d8d9ab86e4e6373ddbc8ae5123585ec6fcb",
+        "commit": "7126140adf55f466e66a1af53c95df0dd44348b7",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.0.0",
+        "tag": "android-v3.0.0",
+        "assets": [
+          "todo-link-3.0.0.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.0.0/todo-link-3.0.0.apk",
+      "tagCommit": "7126140adf55f466e66a1af53c95df0dd44348b7",
+      "issues": []
+    },
+    {
+      "id": "xhub-ext-3.0.0",
+      "version": "3.0.0",
+      "kind": "xhub-extension",
+      "tag": "xhub-ext-v3.0.0",
+      "file": "dist/com.zhou.todo-relay-3.0.0.zip",
+      "status": "ok",
+      "artifact": {
+        "bytes": 91728,
+        "sha256": "706b816f34ae7840ceae28c4f0785876e3216e2df8f95101b07aae8762261107",
+        "commit": "7126140adf55f466e66a1af53c95df0dd44348b7",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/xhub-ext-v3.0.0",
+        "tag": "xhub-ext-v3.0.0",
+        "assets": [
+          "com.zhou.todo-relay-3.0.0.zip"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v3.0.0/com.zhou.todo-relay-3.0.0.zip",
+      "tagCommit": "7126140adf55f466e66a1af53c95df0dd44348b7",
       "issues": []
     }
   ]

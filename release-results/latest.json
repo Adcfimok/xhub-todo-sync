@@ -20,7 +20,9 @@
     "android-apk-2.12.1",
     "android-apk-2.12.2",
     "android-apk-2.12.3",
-    "android-apk-2.12.4"
+    "android-apk-2.12.4",
+    "android-apk-3.0.0",
+    "xhub-ext-3.0.0"
   ],
   "results": [
     {
@@ -336,23 +338,59 @@
       "file": "android/todo-link-2.12.4.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 224466,
       "sha256": "d8a00696c8b12367d87704c187e18ad8139b1b533861fb00afd23edf7fb5572b",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v2.12.4/todo-link-2.12.4.apk",
-      "uploadedAt": "2026-11-07T16:32:48.715Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v2.12.4",
       "commit": "13ef12a707e9bf26bef6ad9a27bef7ba3b0880de",
       "notes": "# 安卓端 2.12.4（versionCode 23）\n\n体检后的一轮清理：修掉一个一直没生效的样式变量、把节日批量写入改成单事务、去掉几处会溢出/冗余的小问题。\n\n## 修了什么\n\n| # | 问题 | 影响 | 修法 |\n| --- | --- | --- | --- |\n| 1 | `--well` 变量被 6 处引用却从未定义 | `var(--well)` 计算失败 → 背景全透明。节日列表的「传统/节气/外国」标签、卡片库的「来自扩展」标签、设置里的预设胶囊、拖拽/删除按钮的按压反馈，全都少了底色 | 深色补 `rgba(255,255,255,.07)`、浅色补 `rgba(20,24,40,.055)` |\n| 2 | 节日批量写入/删除是 54 次独立事务 | 中途被杀进程会留下「只加了一半」的待办，且 `holidayBulk` 还没记账，开关无法撤回 | 合并成 1 个事务；失败回滚内存记录并提示重试 |\n| 3 | 卡头小字 `.hc-meta` 没有省略号保护 | 卡片被缩到 3 列、又赶上「今天完成 N 件 · N 待同步」较长时，可能把卡头撑破 | `max-width: 62%` + 省略号 |\n| 4 | 统计格子点下去没有反馈 | 首页主要点击区，按压无响应 | 加 `scale(.97)` 按压态 |\n| 5 | 首页两个未使用的导入（`normalizeLayout`、`missingCards`） | 死代码 | 移除 |\n\n## 体检过但确认不用改的\n\n- **整页重建**：7 张卡、225 个节点，`click → next frame` 实测 **5.6ms**，没必要做增量渲染。\n- **批量写入耗时**：54 条原实现 46ms（桌面 Chromium，真机约 3~5 倍），瓶颈不在速度而在事务原子性，故只合并事务。\n- **大数字**：四格填 1234/999 在 320/360 宽下都不溢出、不裁切、卡头不溢出。\n- **告警监听**：`emit()` 触发的是 2.5s 去抖的 sweep，54 次 emit 不会造成重复扫描。\n\n## 验证\n\n```\nnode _tools/home-check.mjs      # 88 项（新增「节日标签有底色」）\nnode _tools/nav-v5-check.mjs    # 底栏 + 三处笔记入口\nnode _tools/navbar-check.mjs    # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 46 项\n```\n\n## 产物\n\n- `todo-link-2.12.4.apk`，224,466 字节\n- SHA-256 `d8a00696c8b12367d87704c187e18ad8139b1b533861fb00afd23edf7fb5572b`\n- 签名证书 SHA-256 `0be758eb…620ab`（不变，可直接覆盖安装）",
       "releaseName": "待办同步 安卓端 v2.12.4"
+    },
+    {
+      "id": "android-apk-3.0.0",
+      "version": "3.0.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-3.0.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 245092,
+      "sha256": "3ebaf3bf740a0e3224abac4055785d8d9ab86e4e6373ddbc8ae5123585ec6fcb",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.0.0/todo-link-3.0.0.apk",
+      "uploadedAt": "2026-11-07T17:33:56.093Z",
+      "tag": "android-v3.0.0",
+      "commit": "7126140adf55f466e66a1af53c95df0dd44348b7",
+      "notes": "# 安卓端 3.0.0（versionCode 24）\n\n新增「文件传输」：手机与电脑在同一 Wi-Fi 下互传文件，复用配对关系，不需要账号，也不经过任何云端。\n\n## 新增\n\n- **「我的 → 文件传输」**：状态卡、选择文件、传输中、未完成的发送、待接收、最近传输。\n- **手机 → 电脑**：系统文件选择器（SAF，不申请存储权限）→ 2 MiB 分块 → AES-256-GCM → 电脑扩展收件箱。\n- **电脑 → 手机**：扩展页选择文件 → 手机「待接收」→ 接收后落盘到 `下载/x-hub/`（Android 10+ 走 MediaStore）。\n- **断点续传**：服务端按 `.part` 实际长度恢复；App 被杀后回页面有「未完成的发送 → 继续」，从记录的位置续传。\n- **进度与重试**：块级进度、百分比、已传/总量、预计剩余；每块最多 5 次指数退避重试，4xx 不重试。\n- **安全**：令牌派生 HKDF → AES-256-GCM，AAD 绑定任务与块序号；整文件 SHA-256 双端复核；可执行文件打红标但绝不自动打开。\n\n## 限制\n\n| 项 | 值 |\n| --- | --- |\n| 单文件 | 512 MiB |\n| 电脑侧总配额 | 2 GiB |\n| 待接收有效期 | 24 小时 |\n| 本地保留 | 14 天 |\n\n## 兼容性\n\n- 同步协议仍是 `PROTO 2`，`versionCode 24` 可直接覆盖安装，本地待办/笔记不受影响。\n- 电脑扩展需 **3.0.0** 才有文件面板；旧扩展下手机端会提示「电脑端需升级」，同步照常。\n- 老设备记录没有 `allowFiles` 字段时按允许处理，无需重新配对。\n\n## 验证\n\n```\nnode _tools/android-transfer-check.mjs   # 15 项：待接收/接收参数/选择/发送/进度/完成态\nnode _tools/crypto-interop-check.mjs     # 6 项：与 PC 端 key/nonce/AAD/密文逐字节一致\nnode _tools/home-check.mjs               # 88 项\nnode _tools/nav-v5-check.mjs             # 底栏 5 格\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 46 项\n```\n\n## 产物\n\n- `todo-link-3.0.0.apk`，245,092 字节\n- SHA-256 `3ebaf3bf740a0e3224abac4055785d8d9ab86e4e6373ddbc8ae5123585ec6fcb`\n\n## 升级后建议先试\n\n1. 同一 Wi-Fi 下打开电脑扩展，手机进「文件传输」确认显示电脑地址。\n2. 传一个几 MB 的文件，确认电脑收件箱出现且大小一致。\n3. 传到一半关 Wi-Fi，再打开点「续传」，确认从断点继续而不是从头开始。",
+      "releaseName": "待办同步 安卓端 v3.0.0"
+    },
+    {
+      "id": "xhub-ext-3.0.0",
+      "version": "3.0.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-3.0.0.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 91728,
+      "sha256": "706b816f34ae7840ceae28c4f0785876e3216e2df8f95101b07aae8762261107",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v3.0.0/com.zhou.todo-relay-3.0.0.zip",
+      "uploadedAt": "2026-11-07T17:33:58.360Z",
+      "tag": "xhub-ext-v3.0.0",
+      "commit": "7126140adf55f466e66a1af53c95df0dd44348b7",
+      "notes": "# 扩展 3.0.0\n\n新增「文件传输」面板：电脑 ⇄ 手机直传，与待办同步共用同一套配对与局域网服务。\n\n## 新增\n\n- **文件面板**：选择/拖入文件发送到手机、逐文件进度、待接收与收件箱两列、复制路径、删除/清空。\n- **设备级权限**：每台已配对设备新增「文件 开/关」，关闭后该设备所有文件接口返回 403。\n- **服务端**：分块落盘、断点、SHA-256 校验、2 GiB 配额、24 小时待接收、14 天清理、磁盘余量检查。\n- **加密**：令牌派生 HKDF-SHA256 → 每块 AES-256-GCM，AAD 绑定任务与块序号；手机上传时服务端解密，电脑下发时服务端现场加密。\n- **审计**：收发完成写 `file-receive` / `file-send`，含设备、文件 id、文件名、时间，可从 `/api/admin/audit` 查。\n- **新增自检**：`tests/files.mjs`（37 项）覆盖配对、越权、路径穿越、分块、篡改、重启续传、哈希失败、拒收、权限开关。\n\n## 兼容性\n\n- 扩展 `2.2.3 → 3.0.0`，同步协议不变（`PROTO 2`）。\n- 旧 APK（≤2.12.4）连新扩展：同步完全不受影响，只是没有文件入口。\n- 新 APK（3.0.0）连旧扩展：文件接口 404，手机端提示升级电脑端；同步仍正常。\n- 新目录 `.data/files/`（inbox/out/tmp/index.json），不影响 `hub.json`；卸载扩展不会删用户文件。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/files.mjs         # 37 项\nnode tests/e2e.mjs           # 41 项\nnode tests/security.mjs      # 28 项\n\nnode _tools/files-ui-check.mjs   # 9 项：真实 3 MiB 分块上传 + 面板渲染\n```\n\n## 产物\n\n- `com.zhou.todo-relay-3.0.0.zip`，91,728 字节，16 个文件\n- SHA-256 `706b816f34ae7840ceae28c4f0785876e3216e2df8f95101b07aae8762261107`",
+      "releaseName": "待办同步扩展 · x-hub v3.0.0"
     }
   ],
   "counts": {
-    "total": 18,
-    "success": 1,
+    "total": 20,
+    "success": 2,
     "failed": 0,
-    "skipped": 17,
+    "skipped": 18,
     "unprocessed": 0
   },
   "failure": null,
@@ -360,6 +398,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-07T16:32:43.222Z",
-  "finishedAt": "2026-11-07T16:32:48.715Z"
+  "startedAt": "2026-11-07T17:33:49.384Z",
+  "finishedAt": "2026-11-07T17:33:58.360Z"
 }
