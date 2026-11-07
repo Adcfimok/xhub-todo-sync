@@ -207,9 +207,15 @@ async function httpTests() {
   })
   ok('跨站预检被拒', r.status === 403, r.status)
 
-  // A3 本机接口缺自定义头被拒（CSRF 的第三道闸）
+  // A3 跨站请求被拒：Sec-Fetch-Site 由浏览器写死，页面脚本伪造不了
+  //    在 CORS 层就返回 BAD_ORIGIN（LOCAL_ONLY 分支还有一道 CROSS_SITE 兜底）
+  r = await req('/api/admin/state', { headers: { 'Sec-Fetch-Site': 'cross-site' } })
+  ok('跨站 Sec-Fetch-Site 被拒', r.status === 403 && r.body.code === 'BAD_ORIGIN', r.body)
+
+  // A3b 同源页面不带任何自定义头也必须能访问
+  //     宿主转发 service.request 时不保证透传自定义头，若强制要求就等于把功能打死
   r = await req('/api/admin/state')
-  ok('本机接口缺 X-Hub-Local 被拒', r.status === 403 && r.body.code === 'LOCAL_HEADER_REQUIRED', r.body)
+  ok('同源请求无需自定义头即可访问', r.status === 200 && typeof r.body.pairCode === 'string', r.status)
 
   // A4 正常本机访问（同源、无 Origin）照常工作
   r = await req('/api/admin/state', { headers: LOCAL })
@@ -226,11 +232,11 @@ async function httpTests() {
   r = await post('/api/ai/chat', { baseURL: 'http://169.254.169.254', apiKey: 'x', model: 'y' })
   ok('SSRF 端点已下线（404）', r.status === 404, r.status)
 
-  // A7 diag 同样要求本机头（含内网地址，不能给跨站读）
+  // A7 diag 含内网地址，跨站必须拒绝；本机同源可读
+  r = await req('/api/v1/diag', { headers: { 'Sec-Fetch-Site': 'cross-site' } })
+  ok('diag 跨站被拒', r.status === 403, r.status)
   r = await req('/api/v1/diag')
-  ok('diag 缺本机头被拒', r.status === 403 && r.body.code === 'LOCAL_HEADER_REQUIRED', r.body)
-  r = await req('/api/v1/diag', { headers: LOCAL })
-  ok('diag 带本机头可读', r.status === 200 && typeof r.body.verdict === 'string')
+  ok('diag 同源可读', r.status === 200 && typeof r.body.verdict === 'string')
 
   // A8 配对码：连错 5 次后当前码作废，正确的码也不再接受
   for (let i = 0; i < 5; i++) {

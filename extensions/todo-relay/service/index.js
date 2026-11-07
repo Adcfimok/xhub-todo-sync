@@ -107,19 +107,42 @@ function allowedOrigin(port) {
 }
 
 /**
+ * 判定跨站请求。
+ *
+ * 依据浏览器强制写入、页面脚本无法伪造的两个头：
+ *   - `Sec-Fetch-Site`：跨源一定是 `cross-site`，同源是 `same-origin` / `none`
+ *   - `Origin`：跨源请求必带，值为对方来源
+ *
+ * 为什么不用「强制自定义头」：宿主（x-hub）转发 `service.request` 时是否透传
+ * 自定义头并不确定，一旦不透传，扩展页面所有请求都会被 403 打死。
+ * 而 Origin / Sec-Fetch-Site 由浏览器直接写入，既拦得住 CSRF，又不依赖宿主行为。
+ * 自定义头仍然接受（带了不冲突），只是不再作为必要条件。
+ */
+function isCrossSite(req, port) {
+  const site = req.headers['sec-fetch-site']
+  if (site === 'cross-site') return true
+  const origin = req.headers.origin
+  if (!origin) return false
+  return !allowedOrigin(port).has(origin)
+}
+
+/**
  * 按路径分流 CORS：
  * - /api/v1/* 是手机端用的，靠 Authorization 里的 Bearer 令牌鉴权、不依赖 Cookie，
  *   因此允许任意来源（手机页面 origin 是它自己的 127.0.0.1:47xxx，必须跨源）；
  * - 其余（/api/local、/api/admin、静态资源）一律按同源收紧，返回 null 表示应当拒绝。
  */
 function corsFor(req, pathname, port) {
-  if (pathname.startsWith('/api/v1/')) return { 'Access-Control-Allow-Origin': '*' }
-  const origin = req.headers.origin
-  if (!origin) return {} // 同源请求 / 非浏览器客户端不发 Origin，放行
-  if (allowedOrigin(port).has(origin)) {
-    return { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+  if (pathname.startsWith('/api/v1/')) {
+    // 手机端跨源访问，但诊断接口含内网信息，仍按同源处理
+    if (pathname === '/api/v1/diag') {
+      return isCrossSite(req, port) ? null : {}
+    }
+    return { 'Access-Control-Allow-Origin': '*' }
   }
-  return null
+  if (isCrossSite(req, port)) return null
+  const origin = req.headers.origin
+  return origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}
 }
 
 function fail(res, status, code, extra) {
@@ -452,12 +475,9 @@ const server = http.createServer(async (req, res) => {
   for (const prefix of LOCAL_ONLY) {
     if (!pathname.startsWith(prefix)) continue
     if (!isLocal(req)) return fail(res, 403, 'LOCAL_ONLY')
-    // SSE 用 EventSource 发不出自定义头，改用来源校验（跨源会带 Origin，已在上面拦掉）
-    const isStream = pathname === '/api/local/stream'
-    // 其余本机接口强制带自定义头：跨站请求带自定义头会触发预检，预检被拦就发不出去
-    if (!isStream && req.headers['x-hub-local'] !== '1') {
-      return fail(res, 403, 'LOCAL_HEADER_REQUIRED')
-    }
+    // 跨站请求一律拒绝（浏览器写死的 Sec-Fetch-Site / Origin，页面脚本改不了）。
+    // 同源页面与不带 Origin 的本地客户端放行——不能要求宿主一定透传自定义头。
+    if (isCrossSite(req, port)) return fail(res, 403, 'CROSS_SITE')
     break
   }
 
@@ -495,9 +515,8 @@ const server = http.createServer(async (req, res) => {
 
     // 本机自检：给扩展页面排查「为什么手机连不上」用（只允许本机页面访问）
     if (pathname === '/api/v1/diag') {
+      // 跨站已在 corsFor 里拦掉（该接口含内网地址，不能给外部页面读）
       if (!isLocal(req)) return fail(res, 403, 'LOCAL_ONLY')
-      // 诊断结果含网卡与内网地址，同样要求自定义头，挡住跨站读取
-      if (req.headers['x-hub-local'] !== '1') return fail(res, 403, 'LOCAL_HEADER_REQUIRED')
       const addrs = lanAddresses()
       return send(res, 200, {
         app: APP,
