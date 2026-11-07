@@ -17,8 +17,8 @@ export JAVA_HOME="$JDK"
 export PATH="$(cygpath -u "$JDK/bin"):$PATH"
 
 APP_ID="com.zhou.todolink"
-VER_NAME="2.11.0"
-VER_CODE="17"
+VER_NAME="2.11.1"
+VER_CODE="18"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/res" "$OUT/gen" "$OUT/classes" "$OUT/dex"

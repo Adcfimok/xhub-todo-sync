@@ -81,6 +81,14 @@ function chip(id, label, n) {
 
 const CAT_TAG = { cn: '传统', term: '节气', intl: '外国' }
 
+/** 紧凑日期：11/7。中文长格式会在 62px 列里折行，跨年时再用「26/1/5」区分 */
+function monthDay(ms) {
+  const d = new Date(ms)
+  const now = new Date()
+  const y = d.getFullYear() === now.getFullYear() ? '' : String(d.getFullYear()).slice(2) + '/'
+  return y + (d.getMonth() + 1) + '/' + d.getDate()
+}
+
 function row(x) {
   const left = daysFromToday(x.date)
   const when = left === 0 ? '今天' : left === 1 ? '明天' : left < 0 ? '已过' : left + ' 天后'
@@ -88,7 +96,10 @@ function row(x) {
   btn.addEventListener('click', () => addTodo(x, btn))
 
   return h('div', { class: 'holiday-row' }, [
-    h('div', { class: 'hd-date' }, [h('b', { text: fmtYmd(x.date) }), h('span', { text: '周' + '日一二三四五六'[new Date(x.date).getDay()] })]),
+    h('div', { class: 'hd-date' }, [
+      h('b', { text: monthDay(x.date) }),
+      h('span', { text: '周' + '日一二三四五六'[new Date(x.date).getDay()] }),
+    ]),
     h('div', { class: 'hd-main' }, [
       h('div', { class: 'hd-name' }, [x.name, h('span', { class: 'hd-tag', text: CAT_TAG[x.cat] || '' })]),
       h('div', { class: 'hd-note', text: (x.note || '') + (x.note ? ' · ' : '') + when }),

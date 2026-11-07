@@ -425,11 +425,20 @@ function cardStats() {
   const res = colRecords('resources').filter((x) => !x.deleted)
   const snips = colRecords('snippets').filter((x) => !x.deleted)
   const open = colRecords('todos').filter((t) => !t.deleted && !t.done)
-  return h('div', { class: 'stat-grid' }, [
-    stat('待办', open.length, 'todos'),
-    stat('笔记', notes.length, 'notes'),
-    stat('速达', res.length, 'resources'),
-    stat('提示词', snips.length, 'snippets'),
+  // 今天完成的数量：给统计卡一点「活着」的信息，也把 2 行高度填满
+  const todayDone = colRecords('todos').filter((t) => !t.deleted && t.done && t.completedAt && dayDiff(t.completedAt) === 0).length
+  const pending = S.records.filter((r) => r.dirty).length
+  return h('div', { class: 'hc-stats' }, [
+    h('div', { class: 'stat-grid' }, [
+      stat('待办', open.length, 'todos'),
+      stat('笔记', notes.length, 'notes'),
+      stat('速达', res.length, 'resources'),
+      stat('提示词', snips.length, 'snippets'),
+    ]),
+    h('div', {
+      class: 'hc-hint',
+      text: '今天完成 ' + todayDone + ' 件' + (pending ? ' · ' + pending + ' 条待同步' : ' · 已全部同步'),
+    }),
   ])
 }
 
