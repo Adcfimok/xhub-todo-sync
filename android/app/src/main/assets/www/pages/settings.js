@@ -275,7 +275,7 @@ function notifyCard() {
     h('div', { class: 'switch-row' }, [
       h('div', { class: 'switch-meta' }, [
         h('div', { class: 'switch-title', text: '待办临期提醒' }),
-        h('div', { class: 'switch-sub', text: '到期前 15 分钟发系统通知；同一时间点只提醒一次' }),
+        h('div', { class: 'switch-sub', text: '按每条待办的提醒时间发系统通知 + 震动 + 应用内弹窗；同一条只提醒一次，可稍后 10 分钟' }),
       ]),
       h('label', { class: 'toggle' }, [
         h('input', {

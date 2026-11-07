@@ -72,6 +72,46 @@ export function openForm(opt) {
   opt.fields.forEach((f) => {
     const wrap = h('label', { class: 'field' })
     let input
+    // chips：一组互斥的预设按钮，可带一个「自定义」附输入（如提醒时间）
+    if (f.type === 'chips') {
+      const row = h('div', { class: 'chip-row' })
+      const buttons = []
+      let extra = null
+      if (f.custom) {
+        extra = h('input', {
+          class: 'input',
+          type: f.custom.type || 'datetime-local',
+          value: values[f.custom.key] || '',
+        })
+        extra.addEventListener('input', () => {
+          values[f.custom.key] = extra.value
+        })
+        extra.hidden = true
+      }
+      const sync = () => {
+        buttons.forEach((b) => b.classList.toggle('on', b.getAttribute('data-value') === String(values[f.key])))
+        if (extra) extra.hidden = String(values[f.key]) !== String(f.custom.when)
+      }
+      ;(f.options || []).forEach((o) => {
+        const b = h('button', { class: 'chip', type: 'button', text: o.label, 'data-value': o.value })
+        b.addEventListener('click', (ev) => {
+          ev.preventDefault()
+          ev.stopPropagation()
+          values[f.key] = o.value
+          sync()
+          if (f.onChange) f.onChange(o.value, values)
+        })
+        buttons.push(b)
+        row.appendChild(b)
+      })
+      sync()
+      wrap.appendChild(h('span', { class: 'field-label-text', text: f.label }))
+      wrap.appendChild(row)
+      if (extra) wrap.appendChild(extra)
+      if (f.hint) wrap.appendChild(h('span', { class: 'hint-line', text: f.hint }))
+      body.appendChild(wrap)
+      return
+    }
     if (f.type === 'textarea') {
       input = h('textarea', { rows: f.rows || 4, placeholder: f.placeholder || '', maxlength: f.maxlength || 20000 })
     } else if (f.type === 'select') {

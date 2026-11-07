@@ -149,15 +149,9 @@ public class MainActivity extends Activity {
         requestNotifyPermissionIfNeeded();
     }
 
-    /** 通知渠道：Android 8+ 必须先建渠道，否则通知会被静默丢弃 */
+    /** 通知渠道：Android 8+ 必须先建渠道，否则通知会被静默丢弃（两个渠道见 Reminders） */
     private void ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT < 26) return;
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (nm == null) return;
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "待办提醒", NotificationManager.IMPORTANCE_HIGH);
-        ch.setDescription("待办临期与番茄钟提醒");
-        ch.enableVibration(true);
-        nm.createNotificationChannel(ch);
+        Reminders.ensureChannels(this);
     }
 
     /** Android 13+ 通知需要运行时权限（用字面量，compileSdk 32 没有该常量） */
@@ -393,38 +387,29 @@ public class MainActivity extends Activity {
         public void notify(final String title, final String body) {
             ((Activity) ctx).runOnUiThread(() -> {
                 try {
-                    NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-                    if (nm == null) return;
-
-                    Intent open = new Intent(ctx, MainActivity.class);
-                    open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                    if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
-                    PendingIntent pi = PendingIntent.getActivity(ctx, 0, open, flags);
-
-                    Notification.Builder b;
-                    if (Build.VERSION.SDK_INT >= 26) {
-                        b = new Notification.Builder(ctx, CHANNEL_ID);
-                    } else {
-                        b = new Notification.Builder(ctx);
-                    }
-                    b.setSmallIcon(R.mipmap.ic_launcher)
-                            .setContentTitle(title == null ? "提醒" : title)
-                            .setContentText(body == null ? "" : body)
-                            .setStyle(new Notification.BigTextStyle().bigText(body == null ? "" : body))
-                            .setAutoCancel(true)
-                            .setContentIntent(pi);
-
-                    if (Build.VERSION.SDK_INT >= 26) {
-                        b.setChannelId(CHANNEL_ID);
-                    } else {
-                        b.setPriority(Notification.PRIORITY_HIGH);
-                    }
-                    nm.notify((int) (System.currentTimeMillis() & 0x7fffffff), b.build());
+                    Reminders.notify(ctx, title, body, "notify-" + (System.currentTimeMillis() & 0xffff), false);
                 } catch (Throwable e) {
                     Toast.makeText(ctx, "通知发送失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
+        }
+
+        /** 把最近几条提醒交给系统闹钟：息屏 / 后台也能响 */
+        @JavascriptInterface
+        public void setAlarms(final String json) {
+            try {
+                Reminders.schedule(ctx, json);
+            } catch (Throwable ignore) {
+                // 调度失败不致命，前台提醒仍然有效
+            }
+        }
+
+        @JavascriptInterface
+        public void cancelAlarms() {
+            try {
+                Reminders.cancel(ctx);
+            } catch (Throwable ignore) {
+            }
         }
 
         @JavascriptInterface

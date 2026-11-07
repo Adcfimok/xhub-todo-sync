@@ -23,7 +23,7 @@ function render() {
   const all = colRecords('notes').slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   const list = q ? all.filter((n) => (n.title || '').includes(q) || (n.content || '').includes(q)) : all
 
-  const search = h('div', { class: 'searchbar' }, [
+  const search = h('div', { class: 'searchbar row' }, [
     h('input', {
       class: 'input',
       type: 'search',
@@ -34,6 +34,8 @@ function render() {
         render()
       },
     }),
+    // 笔记已不在底栏，页面内必须有可见的新建入口，不能只靠「+」的类型选择
+    h('button', { class: 'btn mini add-btn', type: 'button', text: '＋ 新建', onclick: () => openEditor(null) }),
   ])
   rootEl.appendChild(search)
 

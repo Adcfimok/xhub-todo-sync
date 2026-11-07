@@ -365,6 +365,8 @@ function parseSsePayload(text) {
   } catch (e) {
     return null
   }
+  // JSON.parse('null') 会返回 null；上游偶尔回一个裸 null，不能直接读字段
+  if (!obj || typeof obj !== 'object') return null
   if (obj.error) {
     return {
       content: '',
@@ -381,12 +383,15 @@ function parseSsePayload(text) {
   if (!src) return out
   if (src.content) out.content = src.content
   if (Array.isArray(src.tool_calls)) {
-    out.toolCalls = src.tool_calls.map((tc, i) => ({
-      index: typeof tc.index === 'number' ? tc.index : i,
-      id: tc.id || '',
-      name: (tc.function && tc.function.name) || '',
-      args: (tc.function && tc.function.arguments) || '',
-    }))
+    out.toolCalls = src.tool_calls
+      // 数组里偶发 null 项：跳过，不能让一个坏元素把整轮对话打断
+      .filter((tc) => tc && typeof tc === 'object')
+      .map((tc, i) => ({
+        index: typeof tc.index === 'number' ? tc.index : i,
+        id: tc.id || '',
+        name: (tc.function && tc.function.name) || '',
+        args: (tc.function && tc.function.arguments) || '',
+      }))
   }
   return out
 }
@@ -438,7 +443,11 @@ function streamOnce(opt) {
         fail = new Error(inc.error)
         return
       }
-      if (inc.usage) usage = inc.usage
+      if (inc.usage) {
+        // 只有用量、choices 为空的尾包也是合法事件，不能当成「什么都没收到」
+        sawEvent = true
+        usage = inc.usage
+      }
       if (inc.content) {
         sawEvent = true
         content += inc.content
@@ -511,6 +520,45 @@ function streamOnce(opt) {
   })
 }
 
+// ---------------------------------------------------------------- 工具调用消息
+
+/**
+ * 把本轮解析出的工具调用整理成 OpenAI 兼容的 assistant.tool_calls。
+ * 上游可能不给 id，这里补一个可预测的（call_<轮次>_<序号>），
+ * 保证随后的 tool 消息能一一对上。
+ */
+export function buildToolCalls(round, toolCalls) {
+  return (toolCalls || []).filter(Boolean).map((c, i) => ({
+    id: c.id || 'call_' + round + '_' + i,
+    type: 'function',
+    function: { name: c.name, arguments: c.args || '{}' },
+  }))
+}
+
+/**
+ * 依次执行工具，并把结果按 tool_call_id 回填到消息数组。
+ *
+ * 这里必须从传入的 assistantMsg 取编号，**不能**从 messages 的最后一条取：
+ * 每执行完一个工具就会 push 一条 role=tool 的消息，它的结构里没有 tool_calls，
+ * 第二轮取就会抛 `Cannot read properties of undefined (reading '1')`。
+ * 一轮里有 3 条待办时，表现为「第 1 条建成、随后整轮中断」。
+ */
+export async function runToolCalls({ assistantMsg, toolCalls, messages, confirmDelete, onTool, runOne }) {
+  // runOne 仅用于测试注入；生产路径走模块内的 execTool
+  const run = runOne || execTool
+  // 与 buildToolCalls 用同一条过滤规则，保证下标与 assistant.tool_calls 一一对应
+  const list = (toolCalls || []).filter(Boolean)
+  for (let i = 0; i < list.length; i++) {
+    const call = list[i]
+    const tc = assistantMsg && assistantMsg.tool_calls ? assistantMsg.tool_calls[i] : null
+    // 理论上不会缺；真缺了也要给出可用的编号，而不是让整轮对话崩在取下标上
+    const callId = tc && tc.id ? tc.id : 'call_orphan_' + i
+    const res = await run(call, { confirmDelete })
+    if (onTool) onTool(call.name, res.summary, res.ok)
+    messages.push({ role: 'tool', tool_call_id: callId, content: res.detail })
+  }
+}
+
 // ---------------------------------------------------------------- agent 循环
 
 /**
@@ -564,23 +612,20 @@ export async function runAgent(opt) {
     }
 
     // 中间 assistant 消息要带 tool_calls（与随后的 tool 消息成对，缺一边上游会 400）
-    opt.messages.push({
+    const assistantMsg = {
       role: 'assistant',
       content: out.content || null,
-      tool_calls: out.toolCalls.map((c, i) => ({
-        id: c.id || 'call_' + round + '_' + i,
-        type: 'function',
-        function: { name: c.name, arguments: c.args || '{}' },
-      })),
-    })
-
-    for (let i = 0; i < out.toolCalls.length; i++) {
-      const call = out.toolCalls[i]
-      const callId = opt.messages[opt.messages.length - 1].tool_calls[i].id
-      const res = await execTool(call, { confirmDelete: opt.confirmDelete })
-      if (opt.onTool) opt.onTool(call.name, res.summary, res.ok)
-      opt.messages.push({ role: 'tool', tool_call_id: callId, content: res.detail })
+      tool_calls: buildToolCalls(round, out.toolCalls),
     }
+    opt.messages.push(assistantMsg)
+
+    await runToolCalls({
+      assistantMsg,
+      toolCalls: out.toolCalls,
+      messages: opt.messages,
+      confirmDelete: opt.confirmDelete,
+      onTool: opt.onTool,
+    })
   }
 
   return { content, usage }

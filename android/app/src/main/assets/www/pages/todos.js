@@ -1,6 +1,7 @@
 import { colRecords, touch, onChange } from '../lib/core.js'
 import { h, emptyBlock, fmtDue, dayDiff } from '../lib/ui.js'
 import { openTodoForm } from '../lib/todoform.js'
+import { remindTimeOf, remindLabel } from '../lib/remind.js'
 
 export const meta = { title: '待办', route: 'todos' }
 
@@ -104,6 +105,13 @@ function todoNode(r) {
   if (r.dueAt) {
     const late = !r.done && r.dueAt < Date.now()
     m.appendChild(h('span', { class: late ? 'late' : '', text: fmtDue(r.dueAt) }))
+  }
+  // 提醒：只有在记录里明确设过提醒才显示，老记录不凭空多出一个标记
+  const explicit = r.remindLead != null || r.remindAt != null
+  const remindAt = remindTimeOf(r)
+  if (explicit && remindAt && !r.done) {
+    const text = remindLabel(r, fmtDue)
+    if (text) m.appendChild(h('span', { class: 'bell', text: '⏰ ' + text }))
   }
   if (r.priority > 0) m.appendChild(h('span', { class: 'pri', text: r.priority === 2 ? '紧急' : '重要' }))
   if (r.dirty) m.appendChild(h('span', { class: 'pend', text: '待同步' }))

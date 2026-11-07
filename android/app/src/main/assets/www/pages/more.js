@@ -12,6 +12,7 @@ const ITEMS = [
   { route: 'stickies', title: '便签', desc: '电脑上的两块便签', col: 'stickies', icon: '▤' },
   { route: 'resources', title: '速达', desc: '网页与常用入口', col: 'resources', icon: '◎' },
   { route: 'snippets', title: '提示词', desc: '常用话术一键复制', col: 'snippets', icon: '⌘' },
+  { route: 'holidays', title: '节日', desc: '传统节日 · 二十四节气 · 外国节日', col: null, icon: '❖' },
   { route: 'ext', title: '扩展', desc: '运行电脑上装的 x-hub 扩展', col: null, icon: '◫' },
   { route: 'account', title: '账号与邀请码', desc: '登录、兑换邀请码、平台 AI 额度', col: null, icon: '◈' },
   { route: 'settings', title: '同步与设置', desc: '配对、冲突、外观', col: null, icon: '⚙' },

@@ -1,5 +1,5 @@
 /**
- * 底栏改 5 格后的回归：格子对齐、三处笔记入口、类型选择、放大与色散。
+ * 底栏改 5 格后的回归：格子对齐、三处笔记入口、类型选择、拖动放大（不含任何光效）。
  *
  * 运行：node _tools/nav-v5-check.mjs [--shots]
  * 依赖：_tools/node_modules 里的 playwright（用本机 Edge 内核）
@@ -141,7 +141,7 @@ try {
       `实测 ${w.indWidth.toFixed(1)}，预期 ${w.expectedWidth.toFixed(1)}`
     );
 
-    // ---------- 3. 动效：放大 + 色散 ----------
+    // ---------- 3. 动效：只放大，不发光 ----------
     const fx = await page.evaluate(async () => {
       const bar = document.getElementById('tabbar');
       const inner = document.querySelector('.tab-indicator > i');
@@ -169,22 +169,25 @@ try {
       bar.classList.add('switching');
       await new Promise((r) => setTimeout(r, 260));
       const sSwitch = scaleNow();
-      const glowOnSwitch = getComputedStyle(inner, '::before').opacity;
       bar.classList.remove('switching');
 
       bar.style.setProperty('--drag-p', '0');
       await new Promise((r) => setTimeout(r, 260));
-      const glowIdle = getComputedStyle(inner, '::before').opacity;
 
-      return { s0, s05, s1, sSwitch, glowOnSwitch, glowIdle, hasConic: glow.backgroundImage.includes('conic-gradient') };
+      // 光效已按要求移除：伪元素不应有任何内容 / 渐变 / 模糊
+      return {
+        s0, s05, s1, sSwitch,
+        glowContent: glow.content,
+        hasConic: glow.backgroundImage.includes('conic-gradient'),
+        glowFilter: glow.filter,
+      };
     });
     check(`${v.name} 静止不放大`, Math.abs(fx.s0 - 1) < 0.02, `scale=${fx.s0.toFixed(3)}`);
     check(`${v.name} 拖动 50% 放大`, fx.s05 > 1.05 && fx.s05 < 1.10, `scale=${fx.s05.toFixed(3)}（期望 1.075）`);
     check(`${v.name} 拖满放大 15%`, Math.abs(fx.s1 - 1.15) < 0.02, `scale=${fx.s1.toFixed(3)}`);
     check(`${v.name} 切页脉冲放大到 1.14`, Math.abs(fx.sSwitch - 1.14) < 0.02, `scale=${fx.sSwitch.toFixed(3)}`);
-    check(`${v.name} 色散用 conic-gradient`, fx.hasConic, fx.hasConic ? '是' : '缺失');
-    check(`${v.name} 静止时色散不可见`, Number(fx.glowIdle) < 0.05, `opacity=${fx.glowIdle}`);
-    check(`${v.name} 切页时色散可见`, Number(fx.glowOnSwitch) > 0.5, `opacity=${fx.glowOnSwitch}`);
+    check(`${v.name} 无彩色渐变层`, !fx.hasConic, fx.hasConic ? '仍有 conic-gradient' : '已移除');
+    check(`${v.name} 无模糊光晕`, !fx.glowFilter || fx.glowFilter === 'none', `filter=${fx.glowFilter}`);
 
     // ---------- 4. 三处笔记入口 ----------
     const entries = [];
@@ -218,10 +221,10 @@ try {
     await page.evaluate(() => (location.hash = '#/home'));
     await page.waitForTimeout(400);
     const allOk = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll('.card')];
-      const card = cards.find((c) => (c.querySelector('h2')?.textContent || '').trim().startsWith('最近笔记'));
+      // 首页改成了可自定义卡片网格，笔记卡的「全部」在 .hc-head 里
+      const card = document.querySelector('.hc[data-card="notes"]');
       if (!card) return { found: false };
-      const btn = [...card.querySelectorAll('button.mini')].find((b) => (b.textContent || '').trim() === '全部');
+      const btn = [...card.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '全部');
       if (!btn) return { found: false };
       btn.click();
       return { found: true };
@@ -277,7 +280,7 @@ try {
       await page.waitForTimeout(420);
       await page.screenshot({ path: path.join(HERE, `nav5-${v.name}-${themeTag}.png`) });
 
-      // 拖动到一半的画面：高亮块放大 + 色散
+      // 拖动到一半的画面：高亮块放大（无光效）
       await page.evaluate(() => {
         const bar = document.getElementById('tabbar');
         bar.classList.add('dragging');

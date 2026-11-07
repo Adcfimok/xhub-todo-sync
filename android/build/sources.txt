@@ -1,3 +1,5 @@
+C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/AlarmReceiver.java
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/AssetServer.java
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/MainActivity.java
+C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/Reminders.java
 C:/Users/zhou/WorkBuddy/xhub/android/build/gen/com/zhou/todolink/R.java

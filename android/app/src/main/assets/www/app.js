@@ -14,16 +14,17 @@ import * as pomodoro from './pages/pomodoro.js'
 import * as stickies from './pages/stickies.js'
 import * as resources from './pages/resources.js'
 import * as snippets from './pages/snippets.js'
+import * as holidays from './pages/holidays.js'
 import * as ext from './pages/ext.js'
 import * as settings from './pages/settings.js'
 
-const PAGES = { home, todos, notes, ai, more, calendar, account, pomodoro, stickies, resources, snippets, ext, settings }
+const PAGES = { home, todos, notes, ai, more, calendar, account, pomodoro, stickies, resources, snippets, holidays, ext, settings }
 const TAB_OF = { home: 'home', todos: 'todos', ai: 'ai', more: 'more' }
 // 二级页 → 固定返回目标；没写的（如笔记，可能从首页也可能从「我的」进）按来源回退
-const BACK_TO = { calendar: 'home', account: 'more', pomodoro: 'ext', stickies: 'more', resources: 'more', snippets: 'more', ext: 'more', settings: 'more' }
+const BACK_TO = { calendar: 'home', account: 'more', pomodoro: 'ext', stickies: 'more', resources: 'more', snippets: 'more', holidays: 'more', ext: 'more', settings: 'more' }
 // 笔记不再是底栏页，但它有固定入口（我的 / 首页两处），所以要按二级页处理：
 // 只有进了 SUB_PAGES，返回键才会退回来源页，而不是一律回首页。
-const SUB_PAGES = { calendar: 1, account: 1, pomodoro: 1, stickies: 1, resources: 1, snippets: 1, ext: 1, settings: 1, notes: 1 }
+const SUB_PAGES = { calendar: 1, account: 1, pomodoro: 1, stickies: 1, resources: 1, snippets: 1, holidays: 1, ext: 1, settings: 1, notes: 1 }
 
 const pageEl = document.getElementById('page')
 const titleEl = document.getElementById('page-title')

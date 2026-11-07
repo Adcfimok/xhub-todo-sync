@@ -219,6 +219,38 @@ export function vibrate(ms) {
   if (navigator.vibrate) navigator.vibrate(ms || 40)
 }
 
+// ---------------------------------------------------------------- 原生闹钟
+
+/** 设备是否支持把提醒交给系统闹钟（老版本 App 没有这个桥） */
+export function hasAlarms() {
+  return !!bridgeFn('setAlarms')
+}
+
+/**
+ * 用系统闹钟安排最近的提醒，息屏 / 后台也能响。
+ * @param {string} json [{at:number, title:string, body:string, tag:string}]
+ */
+export function setAlarms(json) {
+  const fn = bridgeFn('setAlarms')
+  if (!fn) return false
+  try {
+    fn(String(json || '[]'))
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export function cancelAlarms() {
+  const fn = bridgeFn('cancelAlarms')
+  if (!fn) return
+  try {
+    fn()
+  } catch (e) {
+    /* 无闹钟可取消 */
+  }
+}
+
 // ---------------------------------------------------------------- 剪贴板
 
 export function readClipboard() {

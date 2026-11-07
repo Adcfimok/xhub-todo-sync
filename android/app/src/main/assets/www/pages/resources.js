@@ -36,6 +36,7 @@ function render() {
   const bar = h('div', { class: 'filterbar' }, [
     chip('all', '全部', all.length),
     ...KINDS.map((k) => chip(k.value, k.label, all.filter((r) => r.kind === k.value).length)),
+    h('button', { class: 'btn mini add-btn', type: 'button', text: '＋ 新建', onclick: () => edit(null) }),
   ])
   rootEl.appendChild(bar)
 
@@ -49,16 +50,30 @@ function render() {
 
   const grid = h('div', { class: 'res-grid' })
   list.forEach((r) => {
+    // Android WebView 不派发 contextmenu，长按永远走不到；
+    // 改成卡片右上角一个明确的「⋯」，点开就是编辑（表单里带删除）
     grid.appendChild(
-      h('button', { class: 'res', type: 'button', onclick: () => open(r), oncontextmenu: (e) => { e.preventDefault(); edit(r) } }, [
-        h('span', { class: 'res-ic', text: (r.name || '?').slice(0, 1) }),
-        h('span', { class: 'res-n', text: r.name || '未命名' }),
-        h('span', { class: 'res-k', text: kindLabel(r.kind) }),
+      h('div', { class: 'res-item' }, [
+        h('button', { class: 'res', type: 'button', onclick: () => open(r) }, [
+          h('span', { class: 'res-ic', text: (r.name || '?').slice(0, 1) }),
+          h('span', { class: 'res-n', text: r.name || '未命名' }),
+          h('span', { class: 'res-k', text: kindLabel(r.kind) }),
+        ]),
+        h('button', {
+          class: 'res-more',
+          type: 'button',
+          text: '⋯',
+          'aria-label': '编辑或删除',
+          onclick: (e) => {
+            e.stopPropagation()
+            edit(r)
+          },
+        }),
       ])
     )
   })
   scroll.appendChild(grid)
-  scroll.appendChild(h('div', { class: 'hint-line', text: '点按打开，长按编辑' }))
+  scroll.appendChild(h('div', { class: 'hint-line', text: '点按打开；右上角 ⋯ 可编辑或删除' }))
   scroll.appendChild(h('div', { class: 'list-pad' }))
 }
 

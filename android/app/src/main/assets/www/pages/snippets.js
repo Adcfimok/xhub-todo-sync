@@ -1,6 +1,7 @@
 import { colRecords, newRecord, touch, softDelete, onChange } from '../lib/core.js'
 import { h, openForm, emptyBlock, toast } from '../lib/ui.js'
 import { setQuickAdd } from '../lib/quickadd.js'
+import { writeClipboard } from '../lib/native.js'
 
 export const meta = { title: '提示词', route: 'snippets' }
 
@@ -26,7 +27,7 @@ function render() {
   const list = q ? all.filter((s) => (s.title || '').includes(q) || (s.content || '').includes(q)) : all
 
   rootEl.appendChild(
-    h('div', { class: 'searchbar' }, [
+    h('div', { class: 'searchbar row' }, [
       h('input', {
         class: 'input',
         type: 'search',
@@ -37,6 +38,7 @@ function render() {
           render()
         },
       }),
+      h('button', { class: 'btn mini add-btn', type: 'button', text: '＋ 新建', onclick: () => openEditor(null) }),
     ])
   )
 
@@ -64,6 +66,15 @@ function render() {
             onclick: (e) => {
               e.stopPropagation()
               copy(s.content || '')
+            },
+          }),
+          h('button', {
+            class: 'mini',
+            type: 'button',
+            text: '编辑',
+            onclick: (e) => {
+              e.stopPropagation()
+              openEditor(s)
             },
           }),
           h('button', {

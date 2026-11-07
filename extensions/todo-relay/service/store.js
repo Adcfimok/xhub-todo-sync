@@ -873,6 +873,8 @@ function normalizeRecord(r) {
       priority: clampInt(r.priority, 0, 2),
       dueAt: toMsOrNull(r.dueAt),
       remindAt: toMsOrNull(r.remindAt),
+      // 提前量：-1 关闭、0 准时、正数 = 提前分钟。保留 -1，因此不能走 toMsOrNull
+      remindLead: r.remindLead == null || r.remindLead === '' ? null : clampInt(r.remindLead, -1, 525600),
       // 备注与笔记同样属于「正文」，上限见 FIELD_LIMITS；超长会告警，不静默吞掉
       description: clip('todos', 'description', r.description),
       parentId: r.parentId ? clip('todos', 'parentId', r.parentId) : null,
@@ -932,6 +934,7 @@ function fromHostRow(col, row, id, hlc, prev) {
         priority: KEEP(row.priority, p.priority),
         dueAt: KEEP(row.dueAt != null ? row.dueAt : row.due_at, p.dueAt),
         remindAt: KEEP(row.remindAt != null ? row.remindAt : row.remind_at, p.remindAt),
+        remindLead: KEEP(row.remindLead != null ? row.remindLead : row.remind_lead, p.remindLead),
         description: KEEP(row.description, p.description),
         parentId: KEEP(row.parent_id != null ? 'todos:h' + row.parent_id : row.parentId, p.parentId),
         pinned: KEEP(row.pinned, p.pinned),
