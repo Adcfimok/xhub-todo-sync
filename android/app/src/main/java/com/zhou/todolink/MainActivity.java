@@ -326,7 +326,7 @@ public class MainActivity extends Activity {
     }
 
     /** Android 13+ 通知需要运行时权限（用字面量，compileSdk 32 没有该常量） */
-    private void requestNotifyPermissionIfNeeded() {
+    void requestNotifyPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < 33) return;
         if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED) return;
         requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, REQ_NOTIFY);
@@ -343,6 +343,23 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "没有相机权限，请手动输入地址配对", Toast.LENGTH_SHORT).show();
             }
             pendingPermission = null;
+            return;
+        }
+        if (requestCode == REQ_NOTIFY) {
+            // 通知权限被拒 = 到点提醒一条都看不到，必须明确告诉用户并给出补救入口，
+            // 否则 App 表面正常、实际全静音（这是「完全收不到通知」最常见的原因之一）
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (!granted) {
+                Toast.makeText(this, "没有通知权限，到点提醒不会出现在通知栏；可在「设置 → 提醒 → 通知自检」里重新开启", Toast.LENGTH_LONG).show();
+            }
+            if (bridge != null) {
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("granted", granted);
+                } catch (Throwable ignore) {
+                }
+                bridge.emit("notifyperm", o);
+            }
         }
     }
 
@@ -637,11 +654,14 @@ public class MainActivity extends Activity {
             });
         }
 
-        /** 把最近几条提醒交给系统闹钟：息屏 / 后台也能响 */
+        /**
+         * 下发完整提醒计划（不只是最近几条）：原生侧负责到点后自动补排下一条，
+         * 所以 App 未打开时也能持续收到提醒。息屏 / 后台不再依赖 WebView 定时器。
+         */
         @JavascriptInterface
         public void setAlarms(final String json) {
             try {
-                Reminders.schedule(ctx, json);
+                Reminders.setPlan(ctx, json);
             } catch (Throwable ignore) {
                 // 调度失败不致命，前台提醒仍然有效
             }
@@ -650,9 +670,64 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void cancelAlarms() {
             try {
-                Reminders.cancel(ctx);
+                Reminders.clearPlan(ctx);
             } catch (Throwable ignore) {
             }
+        }
+
+        /** App 没打开时响过 / 错过的提醒事件（取走即清空），供页面去重与补发 */
+        @JavascriptInterface
+        public String takeAlarmEvents() {
+            try {
+                return Reminders.takeEvents(ctx);
+            } catch (Throwable e) {
+                return "[]";
+            }
+        }
+
+        /** 通知体检：{exact, notify, channel, plan, armed, next, lastDelay…} */
+        @JavascriptInterface
+        public String alarmState() {
+            try {
+                return Reminders.state(ctx);
+            } catch (Throwable e) {
+                return "{\"ok\":false}";
+            }
+        }
+
+        /** 自检：安排一条 N 秒后的提醒，走和真实提醒完全相同的通路 */
+        @JavascriptInterface
+        public void testAlarm(final int seconds) {
+            try {
+                Reminders.testIn(ctx, seconds);
+            } catch (Throwable ignore) {
+            }
+        }
+
+        @JavascriptInterface
+        public void openExactAlarmSettings() {
+            ((Activity) ctx).runOnUiThread(() -> {
+                try {
+                    Reminders.openExactSettings(ctx);
+                } catch (Throwable ignore) {
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void openNotificationSettings() {
+            ((Activity) ctx).runOnUiThread(() -> {
+                try {
+                    Reminders.openNotifySettings(ctx);
+                } catch (Throwable ignore) {
+                }
+            });
+        }
+
+        /** Android 13+ 通知权限被拒后重新申请（设置页「去开启」按钮用） */
+        @JavascriptInterface
+        public void requestNotifyPermission() {
+            ((Activity) ctx).runOnUiThread(() -> ((MainActivity) ctx).requestNotifyPermissionIfNeeded());
         }
 
         @JavascriptInterface

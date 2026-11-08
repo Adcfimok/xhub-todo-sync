@@ -109,7 +109,7 @@ try {
     }
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.6.0',
+      appVersion: () => '3.7.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},

@@ -6,5 +6,6 @@ C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/KeepAli
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/MainActivity.java
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/PdfIngest.java
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/Reminders.java
+C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/RestartReceiver.java
 C:/Users/zhou/WorkBuddy/xhub/android/app/src/main/java/com/zhou/todolink/WidgetProvider.java
 C:/Users/zhou/WorkBuddy/xhub/android/build/gen/com/zhou/todolink/R.java

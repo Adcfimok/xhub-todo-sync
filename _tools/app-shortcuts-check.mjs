@@ -79,7 +79,7 @@ try {
   await page.addInitScript((apps) => {
     window.__launched = []
     window.Android = {
-      originPort: () => 47830, appVersion: () => '3.6.0', deviceName: () => 'test',
+      originPort: () => 47830, appVersion: () => '3.7.0', deviceName: () => 'test',
       readClipboard: () => '', writeClipboard: () => {}, vibrate: () => {}, toast: () => {}, openUrl: () => {},
       installedApps: () => JSON.stringify(apps),
       appIconFor: (pkg) => '/__appicon/' + pkg + '.png',

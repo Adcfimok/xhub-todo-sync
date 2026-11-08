@@ -1,5 +1,7 @@
 import { S, syncNow, pair, saveMeta, normalizeHost, COLS, COL_NAME, APP_VER, emit, onChange } from '../lib/core.js'
-import { h, toast, confirmAsync, openForm, fmtAgo, emptyBlock } from '../lib/ui.js'
+import { h, toast, confirmAsync, openForm, fmtAgo, fmtDue, emptyBlock } from '../lib/ui.js'
+import { alarmState, testAlarm, openExactAlarmSettings, openNotificationSettings, requestNotifyPermission, hasAlarms } from '../lib/native.js'
+import { scheduleAlarms } from '../lib/alerts.js'
 
 export const meta = { title: '同步与设置', route: 'settings' }
 
@@ -284,12 +286,129 @@ function notifyCard() {
           checked: on,
           onchange: async (e) => {
             await saveMeta('notifyTodo', e.target.checked ? '1' : '0')
+            // 关掉时必须把已排进系统的闹钟撤掉，否则开关形同虚设
+            scheduleAlarms()
             toast(e.target.checked ? '已开启提醒' : '已关闭提醒')
+            render()
           },
         }),
         h('span', { class: 'knob' }),
       ]),
     ]),
+    selfCheckBlock(),
+  ])
+}
+
+// ---------------------------------------------------------------- 通知自检
+
+/** 把毫秒差写成「+0.4 秒 / 提前 2 秒」 */
+function fmtDelay(ms) {
+  const n = Number(ms) || 0
+  const abs = Math.abs(n)
+  const text = abs < 1000 ? abs + ' 毫秒' : (abs / 1000).toFixed(1) + ' 秒'
+  return n < 0 ? '提前 ' + text : '晚 ' + text
+}
+
+/**
+ * 通知自检：把「为什么收不到 / 为什么晚」变成看得见的四项状态。
+ * 这四项任一为否，都会导致到点不响或晚响——也是最常见的四个坑。
+ */
+function selfCheckBlock() {
+  if (!hasAlarms()) {
+    return h('p', { class: 'hint-line', text: '当前环境不支持系统闹钟（浏览器预览），提醒仅在本页可见。' })
+  }
+  const st = alarmState()
+  if (!st) {
+    return h('p', { class: 'hint-line', text: '读不到通知状态，请升级到最新版本 App。' })
+  }
+
+  const rows = []
+  const row = (name, ok, text, action) =>
+    h('div', { class: 'check-row' }, [
+      h('span', { class: 'check-dot', 'data-ok': ok ? '1' : '0' }),
+      h('span', { class: 'check-name', text: name }),
+      h('span', { class: 'check-val' + (ok ? '' : ' bad'), text }),
+      action || h('span', {}),
+    ])
+
+  rows.push(
+    row(
+      '通知权限',
+      st.notify,
+      st.notify ? '已开启' : '未开启，收不到任何通知',
+      st.notify
+        ? null
+        : h('button', {
+            class: 'mini',
+            type: 'button',
+            text: '去开启',
+            onclick: () => {
+              if (!requestNotifyPermission()) openNotificationSettings()
+            },
+          })
+    )
+  )
+  rows.push(
+    row(
+      '精确闹钟',
+      st.exact,
+      st.exact ? '已允许，到点即响' : '未允许，可能晚几分钟到十几分钟',
+      st.exact
+        ? null
+        : h('button', { class: 'mini', type: 'button', text: '去允许', onclick: () => openExactAlarmSettings() })
+    )
+  )
+  rows.push(
+    row(
+      '提醒渠道',
+      st.channel,
+      st.channel ? '正常' : '被静音，通知不会弹出',
+      st.channel ? null : h('button', { class: 'mini', type: 'button', text: '去设置', onclick: () => openNotificationSettings() })
+    )
+  )
+  rows.push(
+    row(
+      '已排提醒',
+      st.armed > 0,
+      st.armed > 0 ? st.armed + ' 条 · 下一条 ' + fmtDue(st.next) : '暂无（没有未来的提醒时间）',
+      null
+    )
+  )
+  if (st.lastFire) {
+    rows.push(
+      row('上次提醒', true, fmtDue(st.lastFire) + ' · 延迟 ' + fmtDelay(st.lastDelay), null)
+    )
+  }
+
+  return h('div', { class: 'self-check' }, [
+    h('div', { class: 'field-label', text: '通知自检' }),
+    ...rows,
+    h('div', { class: 'check-actions' }, [
+      h('button', {
+        class: 'btn',
+        type: 'button',
+        text: '10 秒后测试提醒',
+        onclick: () => {
+          if (!testAlarm(10)) {
+            toast('测试提醒下发失败')
+            return
+          }
+          toast('已排定：10 秒后提醒（可锁屏或退出 App 观察）')
+          // 12 秒后回到本页刷新一行「上次提醒 · 延迟」，这就是实测延迟
+          setTimeout(() => {
+            if (rootEl && rootEl.isConnected) render()
+          }, 12000)
+        },
+      }),
+    ]),
+    h('p', {
+      class: 'hint-line',
+      text: '测试走的是和真实提醒完全相同的通路（系统闹钟 → 通知），可锁屏、可退出 App 后观察；回来这一行会显示实测延迟。',
+    }),
+    h('p', {
+      class: 'hint-line',
+      text: '国产 ROM（MIUI / HyperOS / EMUI / ColorOS）还需在系统设置里允许「自启动」与「后台运行」，否则锁屏后提醒会被系统拦截。',
+    }),
   ])
 }
 

@@ -16,7 +16,7 @@ function bridgeFn(name) {
 const PENDING = new Map()
 // 原生异步事件（文件选择、传输进度）走独立订阅表：
 // 页面按需订阅，原生只认一个入口 __nativeEmit，不再拼 JS 源码。
-const NATIVE = { pick: new Set(), transfer: new Set(), edu: new Set() }
+const NATIVE = { pick: new Set(), transfer: new Set(), edu: new Set(), notifyperm: new Set() }
 let seq = 0
 
 export function onNative(kind, fn) {
@@ -110,6 +110,7 @@ function installHooks() {
     else if (fn === 'pick') emitNative('pick', p)
     else if (fn === 'transfer') emitNative('transfer', p)
     else if (fn === 'edu') emitNative('edu', p)
+    else if (fn === 'notifyperm') emitNative('notifyperm', p)
   }
 }
 
@@ -249,7 +250,7 @@ export function vibrate(ms) {
   if (navigator.vibrate) navigator.vibrate(ms || 40)
 }
 
-// ---------------------------------------------------------------- 原生闹钟
+// ---------------------------------------------------------------- 原生闹钟 / 提醒计划
 
 /** 设备是否支持把提醒交给系统闹钟（老版本 App 没有这个桥） */
 export function hasAlarms() {
@@ -257,7 +258,9 @@ export function hasAlarms() {
 }
 
 /**
- * 用系统闹钟安排最近的提醒，息屏 / 后台也能响。
+ * 把「完整」提醒计划交给原生（不再只下发最近 3 条）。
+ * 原生存进 SharedPreferences，到点响过之后自己摘掉这一条、把下一条补排进系统，
+ * 所以 App 没运行、进程被杀、手机重启之后，后面的提醒依然会按时响。
  * @param {string} json [{at:number, title:string, body:string, tag:string}]
  */
 export function setAlarms(json) {
@@ -278,6 +281,83 @@ export function cancelAlarms() {
     fn()
   } catch (e) {
     /* 无闹钟可取消 */
+  }
+}
+
+/**
+ * 取走「App 没打开时响过 / 错过」的提醒事件，用于对账：
+ * - late=false → 原生已经弹过通知，页面不要再弹一次
+ * - late=true  → 关机 / 强停期间错过的，页面按补发处理
+ * @returns {Array<{tag:string, at:number, ts:number, late:boolean}>}
+ */
+export function takeAlarmEvents() {
+  const fn = bridgeFn('takeAlarmEvents')
+  if (!fn) return []
+  try {
+    const arr = JSON.parse(fn() || '[]')
+    return Array.isArray(arr) ? arr : []
+  } catch (e) {
+    return []
+  }
+}
+
+/**
+ * 通知体检：{exact, notify, channel, plan, armed, next, lastAt, lastFire, lastDelay}
+ * 无原生桥（浏览器预览）时返回 null。
+ */
+export function alarmState() {
+  const fn = bridgeFn('alarmState')
+  if (!fn) return null
+  try {
+    const o = JSON.parse(fn() || '{}')
+    return o && o.ok ? o : null
+  } catch (e) {
+    return null
+  }
+}
+
+/** 自检：安排一条 N 秒后的提醒，走的是和真实提醒完全相同的通路 */
+export function testAlarm(sec) {
+  const fn = bridgeFn('testAlarm')
+  if (!fn) return false
+  try {
+    fn(Math.max(1, Math.min(300, Math.round(sec || 10))))
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export function openExactAlarmSettings() {
+  const fn = bridgeFn('openExactAlarmSettings')
+  if (!fn) return false
+  try {
+    fn()
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export function openNotificationSettings() {
+  const fn = bridgeFn('openNotificationSettings')
+  if (!fn) return false
+  try {
+    fn()
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export function requestNotifyPermission() {
+  const fn = bridgeFn('requestNotifyPermission')
+  if (!fn) return false
+  try {
+    fn()
+    return true
+  } catch (e) {
+    return false
   }
 }
 

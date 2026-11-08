@@ -6,12 +6,12 @@
 */
 
 import { S, saveMeta, onChange, touch } from './core.js'
-import { notify, vibrate, setAlarms, cancelAlarms, hasAlarms } from './native.js'
+import { notify, vibrate, setAlarms, cancelAlarms, hasAlarms, takeAlarmEvents } from './native.js'
 import { fmtDue, h, toast } from './ui.js'
 import { pomoCfg, durOf, fmtMinutes } from './pomo.js'
 import { remindTimeOf } from './remind.js'
+import { planItems, dueNow, nextDueAt, readAlarmEvents, trimFired } from './plan.js'
 
-const OVERDUE_GRACE = 15 * 60 * 1000 // 回到前台时补发 15 分钟内错过的提醒
 const TICK = 30 * 1000
 const MAX_FIRED = 200
 const SNOOZE_MS = 10 * 60 * 1000
@@ -20,13 +20,25 @@ let started = false
 let finishing = false
 let soon = null
 let overlay = null
+let tickTimer = 0
+/** 原生标记为「错过了」的提醒键：id@at，允许突破常规逾期宽限补发一次 */
+const missed = new Set()
 
 export function initAlerts() {
   if (started) return
   started = true
+  reconcile()
   setInterval(sweep, TICK)
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) sweep()
+    if (document.hidden) {
+      // 切走前把最新计划钉进系统：之后再也不会被 WebView 冻结影响
+      scheduleAlarms()
+      return
+    }
+    // 回到前台：先对账（后台期间可能是原生替我们发的通知），再补扫，再重排
+    reconcile()
+    sweep()
+    scheduleAlarms()
   })
   // 首屏稍等一会儿再扫，避开 boot 尚未就绪
   setTimeout(sweep, 4000)
@@ -41,6 +53,46 @@ export function initAlerts() {
   scheduleAlarms()
 }
 
+/**
+ * 和原生的「已响 / 错过」事件对账。
+ *
+ * App 没打开时提醒是原生发的，但页面里的 notifiedMap 并不知道，
+ * 不对账的话用户一打开 App 就会被同一条提醒再弹一次（重复提醒）。
+ */
+function reconcile() {
+  const events = takeAlarmEvents()
+  if (!events.length) return
+  const { fired, missed: late } = readAlarmEvents(events)
+  const map = Object.assign({}, S.meta.notifiedMap || {})
+  let changed = false
+  for (const ev of fired) {
+    if (map[ev.key]) continue
+    map[ev.key] = ev.ts
+    changed = true
+  }
+  // 关机 / 强停期间错过的：不写 notifiedMap，交给 sweep 在 12 小时内补发
+  late.forEach((k) => missed.add(k))
+  if (changed) saveMeta('notifiedMap', map)
+}
+
+/**
+ * 按「下一条到点时刻」精确唤醒一次。
+ *
+ * 固定 30 秒轮询意味着最坏情况要晚 30 秒才响；这里直接算到下一个提醒时刻，
+ * 到点就触发（上限 60 秒兜底，避免长时间挂一个超时被系统清掉）。
+ * 后台 / 息屏时 JS 定时器仍会冻结，那条路由原生闹钟负责。
+ */
+function armTick() {
+  clearTimeout(tickTimer)
+  const now = Date.now()
+  const next = nextDueAt(S.records, S.meta, now)
+  const wait = next ? Math.min(Math.max(next - now + 120, 300), 60000) : TICK
+  tickTimer = setTimeout(() => {
+    sweep()
+    armTick()
+  }, wait)
+}
+
 // 提醒时刻的规则见 lib/remind.js（纯函数，可单测）；这里重新导出，供页面复用
 export { remindTimeOf }
 
@@ -51,6 +103,7 @@ function sweep() {
     /* 提醒失败不该影响主流程 */
   }
   checkPomodoro()
+  armTick()
 }
 
 /** 待办提醒：每个 (id + 提醒时刻) 只提醒一次；稍后提醒单独记在 snooze 里 */
@@ -62,46 +115,33 @@ function checkTodos() {
   let changed = false
   let snoozeChanged = false
 
-  for (const r of S.records) {
-    if (r.col !== 'todos' || r.deleted || r.done) continue
-    const at = remindTimeOf(r)
-    if (!at) continue
-    if (at > now) continue
-    if (now - at > OVERDUE_GRACE) continue
-    const key = r.id + '@' + at
-    if (fired[key]) continue
-    if (snooze[key] && snooze[key] > now) continue
-
-    fireTodo(r, at)
-    fired[key] = now
+  const due = dueNow(S.records, now, { notified: fired, snooze, missed })
+  for (const item of due) {
+    fireTodo(item.record, item.at, item.late)
+    fired[item.key] = now
     changed = true
-    if (snooze[key]) {
-      delete snooze[key]
+    missed.delete(item.key)
+    if (snooze[item.key]) {
+      delete snooze[item.key]
       snoozeChanged = true
     }
   }
 
-  if (changed) {
-    const keys = Object.keys(fired)
-    if (keys.length > MAX_FIRED) {
-      keys.sort((a, b) => fired[a] - fired[b])
-      keys.slice(0, keys.length - MAX_FIRED).forEach((k) => delete fired[k])
-    }
-    saveMeta('notifiedMap', fired)
-  }
+  if (changed) saveMeta('notifiedMap', trimFired(fired, MAX_FIRED))
   if (snoozeChanged) saveMeta('remindSnooze', snooze)
 }
 
-function fireTodo(r, at) {
+function fireTodo(r, at, late) {
   const lead = Number(r.remindLead)
   const when = fmtDue(at)
   const detail = r.dueAt ? (lead > 0 ? '截止 ' + fmtDue(r.dueAt) : '现在到期') : '提醒时间到'
-  notify('待办提醒 · ' + (r.title || '未命名'), detail + '（' + when + '）')
+  const tag = late ? '补发 · ' : ''
+  notify('待办提醒 · ' + (r.title || '未命名'), tag + detail + '（' + when + '）')
   vibrate(260)
   showRemind({
     kind: 'todo',
     title: r.title || '未命名待办',
-    sub: detail + ' · ' + when,
+    sub: tag + detail + ' · ' + when,
     actions: [
       { text: '稍后 10 分钟', onClick: () => snoozeTodo(r, at) },
       { text: '标记完成', primary: true, onClick: () => touch(r, { done: true, completedAt: Date.now() }) },
@@ -261,38 +301,49 @@ export function closeRemind() {
 
 // ---------------------------------------------------------------- 原生闹钟
 
-/** 把未来最近的几条提醒交给系统，息屏也能响 */
+/**
+ * 把「完整」提醒计划交给系统。
+ *
+ * 以前这里只下发最近 3 条，且响过之后不再补排，于是第 4 条起就再也不响、
+ * 3 条都响过之后更是全静音——这是「App 没打开就收不到提醒」的根因。
+ * 现在下发全量（上限 MAX_PLAN），到点由 AlarmReceiver 摘一条、补一条。
+ */
 export function scheduleAlarms() {
   if (!hasAlarms()) return
+  // 用户在设置里关掉提醒后，必须把已排的闹钟撤掉，否则开关形同虚设
+  if (S.meta.notifyTodo === '0') {
+    cancelAlarms()
+    return
+  }
   const now = Date.now()
-  const items = []
+  const byId = new Map()
+  for (const r of S.records) byId.set(r.id, r)
 
-  for (const r of S.records) {
-    if (r.col !== 'todos' || r.deleted || r.done) continue
-    const at = remindTimeOf(r)
-    if (!at || at <= now) continue
-    if (at - now > 30 * 86400000) continue
-    items.push({ at, title: '待办提醒 · ' + (r.title || '未命名'), body: r.dueAt ? '截止 ' + fmtDue(r.dueAt) : '提醒时间到', tag: 'todo-' + r.id })
-  }
+  const plan = planItems(S.records, S.meta, now).map((it) => {
+    if (it.kind === 'pomo') {
+      const mode = (S.meta.pomState || {}).mode
+      return {
+        at: it.at,
+        tag: it.tag,
+        title: mode === 'break' ? '休息结束' : '专注结束',
+        body: mode === 'break' ? '继续下一个番茄' : '起来活动一下',
+      }
+    }
+    const r = byId.get(it.id) || {}
+    return {
+      at: it.at,
+      tag: it.tag,
+      title: '待办提醒 · ' + (r.title || '未命名'),
+      body: r.dueAt ? '截止 ' + fmtDue(r.dueAt) : '提醒时间到',
+    }
+  })
 
-  const s = S.meta.pomState
-  if (s && s.running && s.endAt > now) {
-    items.push({
-      at: Number(s.endAt),
-      title: s.mode === 'break' ? '休息结束' : '专注结束',
-      body: s.mode === 'break' ? '继续下一个番茄' : '起来活动一下',
-      tag: 'pomo',
-    })
-  }
-
-  items.sort((a, b) => a.at - b.at)
-  const top = items.slice(0, 3)
-  if (!top.length) {
+  if (!plan.length) {
     cancelAlarms()
     return
   }
   try {
-    setAlarms(JSON.stringify(top))
+    setAlarms(JSON.stringify(plan))
   } catch (e) {
     /* 老版本没有这个桥，退回纯 JS 提醒 */
   }

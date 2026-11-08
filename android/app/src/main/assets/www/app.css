@@ -1382,6 +1382,28 @@ select.input { appearance: none; }
 .toggle input:checked + .knob { background: var(--accent); opacity: 1; }
 .toggle input:checked + .knob::after { left: 23px; }
 
+/* 通知自检：四行状态 + 一个测试按钮。目的是让「为什么收不到 / 为什么晚」
+   在页面上直接可读，而不是靠用户猜系统设置。 */
+.self-check {
+  border-top: 1px solid var(--line);
+  margin-top: 2px; padding-top: 12px;
+}
+.check-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 0; font-size: 13px;
+}
+.check-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--red);
+}
+.check-dot[data-ok='1'] { background: var(--green); }
+.check-name { color: var(--ink-2); flex: none; width: 64px; }
+.check-val { flex: 1; min-width: 0; color: var(--ink-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.check-val.bad { color: var(--red); }
+.check-row .mini { flex: none; }
+.check-actions { display: flex; gap: 8px; margin-top: 10px; }
+.check-actions .btn { flex: 1; }
+
 .preset-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .preset-chip {
   padding: 5px 11px; border-radius: 999px;
