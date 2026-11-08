@@ -16,7 +16,7 @@ function bridgeFn(name) {
 const PENDING = new Map()
 // 原生异步事件（文件选择、传输进度）走独立订阅表：
 // 页面按需订阅，原生只认一个入口 __nativeEmit，不再拼 JS 源码。
-const NATIVE = { pick: new Set(), transfer: new Set() }
+const NATIVE = { pick: new Set(), transfer: new Set(), edu: new Set() }
 let seq = 0
 
 export function onNative(kind, fn) {
@@ -109,6 +109,7 @@ function installHooks() {
     else if (fn === 'error') window.__httpError(p.id, p.code || 0, p.body || '')
     else if (fn === 'pick') emitNative('pick', p)
     else if (fn === 'transfer') emitNative('transfer', p)
+    else if (fn === 'edu') emitNative('edu', p)
   }
 }
 
@@ -324,4 +325,89 @@ export function openExternal(url) {
   }
   const w = window.open(url, '_blank', 'noopener')
   return w ? Promise.resolve() : Promise.reject(new Error('BLOCKED'))
+}
+
+// ---------------------------------------------------------------- 教务系统内置浏览器
+
+/** 老版本 APK 没有这层桥；浏览器预览里也没有，UI 会自动退化为「粘贴源码」 */
+export function hasEduBrowser() {
+  return !!bridgeFn('openEduImport')
+}
+
+export function openEduImport(url) {
+  const fn = bridgeFn('openEduImport')
+  if (!fn) return false
+  try {
+    fn(String(url || ''))
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export function closeEduImport() {
+  const fn = bridgeFn('closeEduImport')
+  if (!fn) return
+  try {
+    fn()
+  } catch (e) {
+    /* 已经关了 */
+  }
+}
+
+export function eduGoBack() {
+  const fn = bridgeFn('eduGoBack')
+  if (!fn) return
+  try {
+    fn()
+  } catch (e) {
+    /* 没有可回退的网页 */
+  }
+}
+
+/**
+ * 等待原生「导入当前页」把页面源码分块送回来。
+ * 主动权在用户：他什么时候登录完、点到课表页，什么时候才会收到事件，
+ * 所以这里不设短超时，改由 UI 的「取消」调用返回的 cancel()。
+ */
+export function waitEduCapture() {
+  installHooks()
+  const parts = []
+  let n = 1
+  let url = ''
+  let title = ''
+  let done = false
+  let off = () => {}
+  let resolveFn = null
+  let rejectFn = null
+  const promise = new Promise((resolve, reject) => {
+    resolveFn = resolve
+    rejectFn = reject
+  })
+
+  const finish = (err, data) => {
+    if (done) return
+    done = true
+    off()
+    if (err) rejectFn(err)
+    else resolveFn(data)
+  }
+
+  off = onNative('edu', (p) => {
+    if (done) return
+    if (p.error) {
+      finish(new Error(p.error), null)
+      return
+    }
+    n = Math.max(1, Number(p.n) || 1)
+    url = p.url || url
+    title = p.title || title
+    const i = Number(p.i) || 0
+    parts[i] = p.text || ''
+    let got = 0
+    for (let k = 0; k < n; k++) if (parts[k] !== undefined) got++
+    if (got >= n) finish(null, { html: parts.join(''), url, title })
+  })
+
+  return { promise, cancel: () => finish(new Error('已取消'), null) }
 }

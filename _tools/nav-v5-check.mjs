@@ -82,7 +82,7 @@ try {
       window.Android = {
         originPort: () => 47830,
         originChanged: () => false,
-        appVersion: () => '3.1.0',
+        appVersion: () => '3.2.0',
         deviceName: () => 'Nav Probe',
         readClipboard: () => '',
         writeClipboard: () => {},

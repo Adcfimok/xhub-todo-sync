@@ -375,28 +375,36 @@ input, textarea { user-select: text; }
   width: calc((100% - 12px) / 5);
   height: 48px;
   border-radius: 999px;
-  transform: translateX(calc(var(--tab-i, 0) * 100% + var(--drag, 0px)));
-  transition: transform .34s cubic-bezier(.22, .9, .28, 1);
+  /* translate3d 让它常驻合成层；--tab-i 与 --drag 由手势层同帧写入，位移不会先弹回再跳 */
+  transform: translate3d(calc(var(--tab-i, 0) * 100% + var(--drag, 0px)), 0, 0);
+  transition: transform .3s cubic-bezier(.2, .9, .25, 1);
   pointer-events: none;
   z-index: 0;
   will-change: transform;
 }
 
-/* 高亮块本体：磨砂玻璃 + 拖动时放大成水泡 */
+/* 高亮块本体：半透明玻璃 + 拖动时放大成水泡。
+   注意：这里过去有一层 backdrop-filter: blur(14px)，高亮块跟着手指移动时
+   WebView 每帧都要重新采样背景，实测就是「底栏换页时整个窗口闪一下」的根因。
+   去掉内层模糊后改用稍实的底色，外观几乎不变，但动画全程只在合成层上跑。 */
 .tab-indicator > i {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   background: var(--glass-sel-hi);
   border: 1px solid var(--glass-sel-line);
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
-  backdrop-filter: blur(14px) saturate(180%);
   box-shadow:
     0 2px 12px rgba(0, 0, 0, .10),
     inset 0 1px 0 var(--glass-hi);
   /* --drag-p 由 JS 按「拖了多少比例」写 0~1；松手归零时靠这行平滑回落 */
   transform: scale(calc(1 + var(--drag-p, 0) * 0.15));
-  transition: transform .24s cubic-bezier(.22, .9, .28, 1), border-radius .24s ease;
+  transition: transform .18s cubic-bezier(.22, .9, .28, 1), border-radius .18s ease;
+  will-change: transform;
+}
+
+/* 松手吸附：比常规位移多一点点回弹，落定更「跟手」 */
+.tabbar.snapping .tab-indicator {
+  transition: transform .38s cubic-bezier(.2, .92, .26, 1.06);
 }
 
 /* 拖动中：只放大、不发光。高亮块略趋圆，像被指尖捏起来的水泡。
@@ -414,8 +422,16 @@ input, textarea { user-select: text; }
 }
 .tabbar.switching .tab-indicator > i {
   animation: indicator-pop .42s cubic-bezier(.22, .9, .28, 1);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
-/* 拖拽时关掉缓动，手指与高亮块严格同帧 */
+/* 拖拽时关掉缓动，手指与高亮块严格同帧；
+   同时把胶囊本体的背景模糊也停掉——内容在底下滚动时反复重采样同样会闪 */
+.tabbar.dragging {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--bar);
+}
 .tabbar.dragging .tab-indicator { transition: none; }
 .tabbar.dragging .tab svg { transition: none; }
 
@@ -1669,7 +1685,10 @@ select.input { appearance: none; }
   align-items: flex-start;
 }
 .hq-mark { flex: none; font-size: 20px; line-height: 1; color: var(--accent); }
+/* 右引号贴着文字末尾、略微下沉收尾；不挤压正文，也不改变 1 行卡片的高度 */
+.hq-mark-end { align-self: flex-end; font-size: 17px; opacity: .78; }
 .hq-text {
+  min-width: 0;
   font-size: 14px;
   line-height: 1.5;
   font-weight: 600;
@@ -1845,6 +1864,25 @@ select.input { appearance: none; }
 .imp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); text-align: left; }
 .imp-opt b { font-size: 13.5px; }
 .imp-opt span { font-size: 11.5px; color: var(--ink-3); }
+
+/* ---------- 教务系统一键导入 ---------- */
+.edu-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.edu-chip {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.edu-chip.on { border-color: var(--accent); color: var(--accent); background: var(--glass-sel); }
+.edu-preview { max-height: 230px; overflow-y: auto; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 12px; }
+.edu-row { display: flex; flex-direction: column; gap: 2px; padding: 8px 11px; border-bottom: 1px solid var(--line); }
+.edu-row:last-child { border-bottom: none; }
+.edu-row b { font-size: 13px; font-weight: 600; }
+.edu-row span { font-size: 11.5px; color: var(--ink-3); }
 
 
 /* ---------- 倒数日 ---------- */

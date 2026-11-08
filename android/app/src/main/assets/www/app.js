@@ -46,6 +46,11 @@ let current = null
 let cleanup = null
 let prevRoute = 'home'
 let suppressTabClick = false
+/** 每个页面各自的滚动位置：切回来时还原，不再「跳回顶部」 */
+const scrollPos = {}
+/** 手势切页：跳过点按脉冲，避免位移动画 + 果冻动画叠在同一层上闪一下 */
+let gestureSwitch = false
+let gestureTimer = 0
 
 function routeName() {
   const name = (location.hash || '').replace(/^#\/?/, '')
@@ -59,8 +64,14 @@ function go(name) {
 
 function render(force) {
   const name = routeName()
+  const viaGesture = gestureSwitch
+  gestureSwitch = false
+  clearTimeout(gestureTimer)
   if (!force && current === name) return
   if (current && current !== name) prevRoute = current
+  // 切走之前记下这一页滚到哪儿了；页面 DOM 下一行就会被清掉
+  const oldScroll = pageEl.querySelector('.scroll')
+  if (current && oldScroll) scrollPos[current] = oldScroll.scrollTop
   if (cleanup) {
     try {
       cleanup()
@@ -84,18 +95,55 @@ function render(force) {
   if (tabbarEl) {
     const slot = TAB_SLOTS[activeTab]
     tabbarEl.style.setProperty('--tab-i', String(slot == null ? 0 : slot))
-    // 切页脉冲：高亮块从一个格子「跳」到另一个格子时，放大 + 炫彩一次
-    tabbarEl.classList.remove('switching')
-    void tabbarEl.offsetWidth
-    tabbarEl.classList.add('switching')
-    clearTimeout(render._pulse)
-    render._pulse = setTimeout(() => tabbarEl.classList.remove('switching'), 440)
+    // 点按才做果冻脉冲；手势切页已经有「跟手 → 吸附」的位移，再叠一层会闪
+    if (!viaGesture) pulseTab()
   }
 
+  // 清空与重建都在同一个任务里完成，浏览器不会画出中间的空白帧
   pageEl.innerHTML = ''
   // 先清掉上一页注册的「+」动作，再由新页面自己注册
   resetQuickAdd()
   cleanup = page.mount(pageEl) || null
+  // 回到上一页时还原滚动位置（布局是同步生成的，此时 .scroll 已有高度）
+  const newScroll = pageEl.querySelector('.scroll')
+  if (newScroll && scrollPos[name]) newScroll.scrollTop = scrollPos[name]
+  fadeInPage()
+}
+
+/**
+ * 点按切页的果冻脉冲。
+ * 以前用 remove class → 读 offsetWidth 强制同步布局 → add class 重启动画；
+ * 那次强制布局会让带 backdrop-filter 的底栏整层重新采样，是实测「窗口闪一下」的主因。
+ * 改用 Web Animations：只动合成层的 transform / border-radius，不触发布局。
+ */
+function pulseTab() {
+  if (!tabbarEl) return
+  const inner = tabbarEl.querySelector('.tab-indicator > i')
+  if (!inner || !inner.animate) return
+  try {
+    inner.animate(
+      [
+        { transform: 'scale(1)', borderRadius: '999px', offset: 0 },
+        { transform: 'scale(1.18)', borderRadius: '42%', offset: 0.38 },
+        { transform: 'scale(.96)', offset: 0.72 },
+        { transform: 'scale(1)', borderRadius: '999px', offset: 1 },
+      ],
+      { duration: 420, easing: 'cubic-bezier(.22, .9, .28, 1)' }
+    )
+  } catch (e) {
+    /* 老 WebView 没有 WAAPI，脉冲只是少了个装饰，不影响切页 */
+  }
+}
+
+/** 切页时给内容一层极轻的淡入，掩盖整页重建的硬切；只动 opacity，不触发重排 */
+function fadeInPage() {
+  if (!pageEl.animate) return
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  try {
+    pageEl.animate([{ opacity: 0.86 }, { opacity: 1 }], { duration: 165, easing: 'cubic-bezier(.2, .8, .3, 1)' })
+  } catch (e) {
+    /* 同上 */
+  }
 }
 
 function syncChip() {
@@ -320,15 +368,21 @@ function initTabGesture() {
   let unit = 1
   let dragging = false
   let pid = null
+  // 灵敏度：起手阈值、手势时长，以及 rAF 合帧用的暂存值
+  let startT = 0
+  let lastT = 0
+  let raf = 0
+  let pendingD = 0
+  let pendingP = 0
 
   const indexNow = () => {
     const v = Number(tabbarEl.style.getPropertyValue('--tab-i'))
     return isFinite(v) ? Math.max(0, Math.min(N - 1, v)) : 0
   }
 
-  // 离目标最近的合法格子（0/1/2/4/5）。
-  // 从笔记(2) 往右拖一格，目标是 3（中央 +）——2 和 4 距离相同，
-  // 此时必须按拖动方向倒向 4，否则「拖了一格却弹回原位」。
+  // 离目标最近的合法格子（0/1/3/4）。
+  // 从待办(1) 往右拖一格，目标是 2（中央 +）——1 和 3 距离相同，
+  // 此时必须按拖动方向倒向 3，否则「拖了一格却弹回原位」。
   const nearestSlot = (want, dir) => {
     let best = VALID_SLOTS[0]
     let bestDist = Math.abs(best - want)
@@ -342,12 +396,21 @@ function initTabGesture() {
     return best
   }
 
+  /** 一个 pointermove 只写一次样式：多个事件合并到下一帧，避免逐事件触发样式重算 */
+  const paintDrag = () => {
+    raf = 0
+    tabbarEl.style.setProperty('--drag', pendingD.toFixed(1) + 'px')
+    tabbarEl.style.setProperty('--drag-p', pendingP.toFixed(3))
+  }
+
   tabbarEl.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     // 点在中央 + 上不进入拖拽，避免把「新建」吃掉
     if (e.target.closest && e.target.closest('.tab-add')) return
     startX = e.clientX
     startY = e.clientY
+    startT = lastT = e.timeStamp || Date.now()
+    pendingD = pendingP = 0
     baseI = indexNow()
     unit = Math.max(1, (tabbarEl.clientWidth - 12) / N)
     dragging = false
@@ -361,27 +424,31 @@ function initTabGesture() {
       const dx = e.clientX - startX
       const dy = e.clientY - startY
       if (!dragging) {
-        // 先判方向：竖向滑动不该抢走点击
-        if (Math.abs(dx) < 6) return
-        if (Math.abs(dx) < Math.abs(dy) * 1.2) return
+        // 起手阈值从 6px 降到 3px：轻扫就能带动高亮块；
+        // 方向判定放宽到 0.85，横向略占优就接管（但仍不抢竖向列表滚动）
+        if (Math.abs(dx) < 3) return
+        if (Math.abs(dx) * 0.85 < Math.abs(dy)) return
         dragging = true
         tabbarEl.classList.add('dragging')
+        tabbarEl.classList.remove('snapping')
         try {
           tabbarEl.setPointerCapture(pid)
         } catch (err) {
           /* 老 WebView 没有指针捕获，不影响主流程 */
         }
       }
-      // 两端加阻尼，拖不出去
+      lastT = e.timeStamp || Date.now()
+
+      // 两端加阻尼，拖不出去（0.18 比原来的 0.32 更跟手）
       const min = -baseI * unit
       const max = (N - 1 - baseI) * unit
       let d = dx
-      if (d < min) d = min + (d - min) * 0.32
-      if (d > max) d = max + (d - max) * 0.32
-      tabbarEl.style.setProperty('--drag', d.toFixed(1) + 'px')
-      // 拖动进度 0~1：拖满一格即到顶，高亮块的放大与色散都按这个值走
-      const p = Math.min(1, Math.abs(d) / unit)
-      tabbarEl.style.setProperty('--drag-p', p.toFixed(3))
+      if (d < min) d = min + (d - min) * 0.18
+      if (d > max) d = max + (d - max) * 0.18
+      pendingD = d
+      // 拖动进度 0~1：拖满一格即到顶，高亮块的放大按这个值走
+      pendingP = Math.min(1, Math.abs(d) / unit)
+      if (!raf) raf = requestAnimationFrame(paintDrag)
       if (e.cancelable) e.preventDefault()
     },
     { passive: false }
@@ -389,8 +456,13 @@ function initTabGesture() {
 
   function finish(e) {
     if (pid == null || (e && e.pointerId !== pid)) return
+    if (raf) {
+      cancelAnimationFrame(raf)
+      raf = 0
+    }
     const wasDragging = dragging
-    const d = parseFloat(tabbarEl.style.getPropertyValue('--drag')) || 0
+    // 用最后一次事件算出的值，而不是可能落后一帧的 style
+    const d = pendingD || parseFloat(tabbarEl.style.getPropertyValue('--drag')) || 0
     dragging = false
     pid = null
     tabbarEl.classList.remove('dragging')
@@ -402,9 +474,28 @@ function initTabGesture() {
     suppressTabClick = true
     setTimeout(() => (suppressTabClick = false), 60)
 
-    const steps = Math.round(d / unit)
+    // 位移决定翻几格；只有「短促、幅度不足半格」的轻扫补一格。
+    // 不用瞬时速度做门槛：不同 WebView 的 pointer 时间戳精度差别很大，判定会飘；
+    // 也不能把速度折算成位移，否则普通拖动会凭空多跳一格。
+    let steps = Math.round(d / unit)
+    const dur = lastT - startT
+    const quick = dur > 0 && dur < 400 && Math.abs(d) > 8 && Math.abs(d) < unit * 0.6
+    if (quick && steps === 0) steps = d > 0 ? 1 : -1
+    steps = Math.max(-N, Math.min(N, steps))
     const target = nearestSlot(baseI + steps, d)
-    if (target !== baseI) go(SLOT_ROUTE[target])
+
+    // 松手瞬间就把高亮块送到目标格：以前要等 hashchange 才更新 --tab-i，
+    // 中间会先弹回原格再跳过去，这一来一回正是「窗口闪动」最明显的部分。
+    tabbarEl.classList.add('snapping')
+    clearTimeout(finish._snap)
+    finish._snap = setTimeout(() => tabbarEl.classList.remove('snapping'), 420)
+    tabbarEl.style.setProperty('--tab-i', String(target))
+    if (target !== baseI) {
+      gestureSwitch = true
+      clearTimeout(gestureTimer)
+      gestureTimer = setTimeout(() => (gestureSwitch = false), 180)
+      go(SLOT_ROUTE[target])
+    }
   }
 
   tabbarEl.addEventListener('pointerup', finish)

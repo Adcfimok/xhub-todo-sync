@@ -395,7 +395,12 @@ function cardQuote() {
         await saveMeta('quotePick', { day: todaySeed(), content: nx.content })
         render()
       },
-    }, [h('span', { class: 'hq-mark', text: '“' }), h('span', { class: 'hq-text', text: content })]),
+    }, [
+      h('span', { class: 'hq-mark', text: '“' }),
+      h('span', { class: 'hq-text', text: content }),
+      // 以前只有左引号，句子看起来像没说完；补上右引号成对收尾
+      h('span', { class: 'hq-mark hq-mark-end', text: '”' }),
+    ]),
     h('div', { class: 'hc-quote-foot' }, [
       h('span', { class: 'hc-quote-from', text: '—— ' + q.from }),
       h('button', { class: 'mini hq-edit', type: 'button', text: '自定义', onclick: () => editQuote() }),

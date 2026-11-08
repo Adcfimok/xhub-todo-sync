@@ -1,6 +1,7 @@
 import { S, saveMeta } from '../lib/core.js'
 import { h, toast, confirmAsync, openForm } from '../lib/ui.js'
-import { writeClipboard } from '../lib/native.js'
+import { writeClipboard, hasEduBrowser, openEduImport, closeEduImport, waitEduCapture } from '../lib/native.js'
+import { EDU_PRESETS, parseEduText, mergeTimetable } from '../lib/edu.js'
 import {
   weekOfTerm,
   coursesOnDay,
@@ -256,13 +257,17 @@ function openImport() {
   const box = h('div', { class: 'lib-card' }, [
     h('div', { class: 'lib-head' }, [h('b', { text: '导入课表' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
     h('div', { class: 'imp-opts' }, [
-      h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromClipboard() } }, [
-        h('b', { text: '从剪贴板粘贴 JSON' }),
-        h('span', { text: '把之前导出的课表 JSON 粘贴进来' }),
-      ]),
       h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromEdu() } }, [
         h('b', { text: '教务系统一键导入' }),
-        h('span', { text: '登录学校教务系统抓取课表（需账号）' }),
+        h('span', { text: '内置浏览器登录教务 → 进课表页 → 点「导入当前页」' }),
+      ]),
+      h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromClipboard() } }, [
+        h('b', { text: '粘贴 JSON / 页面源码' }),
+        h('span', { text: '导出的课表 JSON、教务表格 HTML 都能识别' }),
+      ]),
+      h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromSource('') } }, [
+        h('b', { text: '粘贴 HTML 源码' }),
+        h('span', { text: '浏览器里「查看网页源代码」复制整页内容' }),
       ]),
     ]),
   ])
@@ -273,41 +278,72 @@ function openImport() {
   })
 }
 
-function importFromClipboard() {
+function openMask(box) {
   const mask = h('div', { class: 'lib-mask' })
-  const input = h('textarea', { class: 'input', rows: 6, placeholder: '粘贴课表 JSON' })
-  const box = h('div', { class: 'lib-card' }, [
-    h('div', { class: 'lib-head' }, [h('b', { text: '粘贴 JSON' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
-    input,
-    h('button', {
-      class: 'btn primary block',
-      type: 'button',
-      text: '导入',
-      onclick: async () => {
-        let parsed
-        try {
-          parsed = JSON.parse(input.value)
-        } catch (e) {
-          toast('JSON 格式不对，无法解析')
-          return
-        }
-        const data = normalizeTimetable(parsed)
-        if (!data.courses.length) {
-          toast('没有读到有效的课程')
-          return
-        }
-        await saveMeta('timetable', data)
-        mask.remove()
-        render()
-        toast('已导入 ' + data.courses.length + ' 门课程')
-      },
-    }),
-  ])
   mask.appendChild(box)
   document.body.appendChild(mask)
   mask.addEventListener('click', (e) => {
     if (e.target === mask) mask.remove()
   })
+  return mask
+}
+
+/** 以前导出的课表 JSON 直接吃（保留 termStart）；其它格式交给统一解析器 */
+function importFromClipboard() {
+  const input = h('textarea', { class: 'input', rows: 6, placeholder: '粘贴本 App 导出的课表 JSON' })
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [h('b', { text: '粘贴课表 JSON' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
+      input,
+      h('button', {
+        class: 'btn primary block',
+        type: 'button',
+        text: '解析',
+        onclick: () => {
+          const text = input.value.trim()
+          if (!text) return toast('先粘贴内容')
+          try {
+            const direct = normalizeTimetable(JSON.parse(text))
+            if (direct.courses.length) {
+              mask.remove()
+              showImportPreview({ courses: direct.courses, source: 'json', warnings: [] }, direct.termStart)
+              return
+            }
+          } catch (e) {
+            /* 不是本 App 的导出格式，往下走统一解析 */
+          }
+          const parsed = parseEduText(text)
+          if (!parsed.courses.length) return toast(parsed.warnings[0] || '没有读到有效的课程')
+          mask.remove()
+          showImportPreview(parsed)
+        },
+      }),
+    ])
+  )
+}
+
+/** 粘贴教务页源码 / 接口 JSON：与内置浏览器抓到的内容走同一套解析器 */
+function importFromSource(prefill) {
+  const input = h('textarea', { class: 'input', rows: 7, placeholder: '粘贴课表页 HTML 源码，或教务接口返回的 JSON' })
+  input.value = prefill || ''
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [h('b', { text: '粘贴页面源码' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
+      h('p', { class: 'lib-hint', text: '在电脑浏览器打开课表页 → 右键「查看网页源代码」→ 全选复制粘贴到这里。内容只在本机解析，不会上传。' }),
+      input,
+      h('button', {
+        class: 'btn primary block',
+        type: 'button',
+        text: '解析',
+        onclick: () => {
+          const parsed = parseEduText(input.value)
+          if (!parsed.courses.length) return toast(parsed.warnings[0] || '没有识别到课程')
+          mask.remove()
+          showImportPreview(parsed)
+        },
+      }),
+    ])
+  )
 }
 
 async function exportJson() {
@@ -324,17 +360,149 @@ async function exportJson() {
   }
 }
 
-/** 教务系统导入：框架。真实对接需要学校账号与具体教务系统接口，这里给出接入位。 */
+// ---------------------------------------------------------------- 教务系统一键导入
+
+/**
+ * 流程照搬 WakeUp 课程表（其 assets/empty.html 的提示）：
+ * 填教务网址 → 内置浏览器打开 → 用户自己登录 → 点到课表界面 → 点「导入当前页」。
+ * 学校列表无法内置（各校地址不同且会变），所以网址由用户填；类型只影响操作提示。
+ */
 function importFromEdu() {
-  const mask = h('div', { class: 'lib-mask' })
-  const box = h('div', { class: 'lib-card' }, [
-    h('div', { class: 'lib-head' }, [h('b', { text: '教务系统一键导入' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
-    h('p', { class: 'lib-hint', text: '支持正方教务、URP、强智等主流系统。因各校接口不同，需要先登录学校教务系统。' }),
-    h('p', { class: 'lib-hint', text: '当前版本暂未内置教务抓取引擎，请优先用「从剪贴板导入」或手动录入；教务直连会在后续版本接入。' }),
-  ])
-  mask.appendChild(box)
-  document.body.appendChild(mask)
-  mask.addEventListener('click', (e) => {
-    if (e.target === mask) mask.remove()
+  let preset = S.meta.eduPreset || 'other'
+  const urlInput = h('input', { class: 'input', type: 'url', inputmode: 'url', placeholder: 'https://jw.xxx.edu.cn', value: S.meta.eduUrl || '' })
+  const hint = h('p', { class: 'lib-hint', text: presetHint(preset) })
+  const chips = h('div', { class: 'edu-presets' })
+  const chipEls = []
+  EDU_PRESETS.forEach((p) => {
+    const b = h('button', {
+      class: 'edu-chip' + (p.id === preset ? ' on' : ''),
+      type: 'button',
+      text: p.name,
+      onclick: () => {
+        preset = p.id
+        hint.textContent = presetHint(preset)
+        chipEls.forEach((x, i) => x.classList.toggle('on', EDU_PRESETS[i].id === preset))
+      },
+    })
+    chipEls.push(b)
+    chips.appendChild(b)
   })
+
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [h('b', { text: '教务系统一键导入' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
+      h('p', { class: 'lib-hint', text: '选教务类型、填学校教务首页地址，点「打开」后会进入内置浏览器。' }),
+      chips,
+      hint,
+      urlInput,
+      h('button', {
+        class: 'btn primary block',
+        type: 'button',
+        text: '打开教务系统',
+        onclick: () => {
+          const url = urlInput.value.trim()
+          if (!url) return toast('先填学校教务系统网址')
+          mask.remove()
+          if (!hasEduBrowser()) {
+            toast('这版没有内置浏览器，改用「粘贴页面源码」导入')
+            importFromSource('')
+            return
+          }
+          confirmEduSteps(url, preset)
+        },
+      }),
+      h('p', { class: 'lib-hint', text: '账号密码只输在教务系统自己的页面里，本 App 不读取、不保存、不上传；抓取到的页面只在本机解析。' }),
+    ])
+  )
+}
+
+function presetHint(id) {
+  const p = EDU_PRESETS.filter((x) => x.id === id)[0] || EDU_PRESETS[EDU_PRESETS.length - 1]
+  return p.hint
+}
+
+/** 打开前把 WakeUp 式的操作提示讲清楚，避免用户在登录页就点「导入」 */
+function confirmEduSteps(url, preset) {
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [h('b', { text: '接下来这样操作' })]),
+      h('p', { class: 'lib-hint', text: '1. 在打开的内置浏览器里登录教务系统（账号密码不经过本 App）。' }),
+      h('p', { class: 'lib-hint', text: '2. 一路点到「课表 / 本学期课表」那一页，等课程名都显示出来。' }),
+      h('p', { class: 'lib-hint', text: '3. 点顶部「导入当前页」，页面会自动关闭并列出识别到的课程，确认后再写入。' }),
+      h('p', { class: 'lib-hint', text: '没收录贵校网址也没关系：填自己学校教务首页即可；登录页点导入识别不到课程，回到课表页再点一次。' }),
+      h('div', { class: 'act-grid' }, [
+        h('button', { class: 'btn primary', type: 'button', text: '知道了，打开', onclick: () => { mask.remove(); startEduCapture(url, preset) } }),
+        h('button', { class: 'btn', type: 'button', text: '取消', onclick: () => mask.remove() }),
+      ]),
+    ])
+  )
+}
+
+function startEduCapture(url, preset) {
+  saveMeta('eduUrl', url)
+  saveMeta('eduPreset', preset)
+  // 先订阅再打开：原生按钮点下的那一刻就会把源码送回来
+  const cap = waitEduCapture()
+  if (!openEduImport(url)) {
+    cap.cancel()
+    toast('打不开内置浏览器，改用粘贴源码导入')
+    importFromSource('')
+    return
+  }
+  cap.promise
+    .then((cap2) => {
+      closeEduImport()
+      const parsed = parseEduText(cap2.html, cap2.url)
+      if (!parsed.courses.length) {
+        toast(parsed.warnings[0] || '没识别到课程')
+        importFromSource(cap2.html.slice(0, 20000))
+        return
+      }
+      showImportPreview(parsed)
+    })
+    .catch((err) => {
+      closeEduImport()
+      if (err && err.message !== '已取消') toast(err.message || '导入失败')
+    })
+}
+
+/** 预览 → 覆盖 / 追加 → 写入；开学日期可顺手补上 */
+function showImportPreview(parsed, presetTermStart) {
+  const courses = parsed.courses || []
+  const data = tt()
+  const termInput = h('input', { class: 'input', type: 'date', value: presetTermStart || data.termStart || '' })
+  const list = h('div', { class: 'edu-preview' })
+  courses.slice(0, 12).forEach((c) => {
+    const wt = WEEK_TYPE_LABEL[c.weekType] || '每周'
+    const wk = c.weekStart === c.weekEnd ? '第 ' + c.weekStart + ' 周' : c.weekStart + '-' + c.weekEnd + ' 周'
+    list.appendChild(
+      h('div', { class: 'edu-row' }, [
+        h('b', { text: c.name }),
+        h('span', { text: WEEK_NAMES[c.day] + ' · ' + slotLabel(c) + ' · ' + wk + (wt === '每周' ? '' : ' · ' + wt) }),
+      ])
+    )
+  })
+  if (courses.length > 12) list.appendChild(h('div', { class: 'edu-row' }, [h('span', { text: '…… 还有 ' + (courses.length - 12) + ' 条' })]))
+
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [h('b', { text: '识别到 ' + courses.length + ' 条课程' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
+      parsed.warnings && parsed.warnings.length ? h('p', { class: 'lib-hint', text: parsed.warnings.join('；') }) : null,
+      list,
+      h('p', { class: 'lib-hint', text: '开学日期（那周的周一），用于计算第几周与单双周：' }),
+      termInput,
+      h('div', { class: 'act-grid' }, [
+        h('button', { class: 'btn primary', type: 'button', text: '覆盖导入', onclick: () => applyImport('replace') }),
+        h('button', { class: 'btn', type: 'button', text: '追加到现有', onclick: () => applyImport('append') }),
+      ]),
+    ])
+  )
+
+  async function applyImport(mode) {
+    const merged = mergeTimetable(tt(), parsed, mode, termInput.value)
+    await saveMeta('timetable', merged)
+    mask.remove()
+    render()
+    toast('已导入 ' + courses.length + ' 条课程')
+  }
 }

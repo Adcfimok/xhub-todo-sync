@@ -15,12 +15,16 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.provider.OpenableColumns;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -28,9 +32,14 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -72,6 +81,12 @@ public class MainActivity extends Activity {
     private int originPort = 0;
     /** 文件选择是异步的：拿到结果时要知道回给页面哪一次请求 */
     String pickReqId = null;
+
+    /** 教务导入：在同一个 Activity 里叠一层独立 WebView，登录态与外部站点完全隔离于主页面 */
+    FrameLayout rootLayout;
+    LinearLayout eduOverlay;
+    WebView eduView;
+    TextView eduAddr;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -147,11 +162,162 @@ public class MainActivity extends Activity {
             }
         });
 
-        setContentView(webView);
+        // 根布局用 FrameLayout：教务导入时可以在上面叠一层独立 WebView，
+        // 不需要新建 Activity，也不用把抓取到的页面源码跨 Activity 传回来。
+        rootLayout = new FrameLayout(this);
+        rootLayout.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(rootLayout);
         webView.loadUrl(server.baseUrl() + "index.html");
 
         ensureNotificationChannel();
         requestNotifyPermissionIfNeeded();
+    }
+
+    /** 教务网址补全协议；用户显式写了 http:// 时按用户的来（不少学校教务只开 http） */
+    private static String normalizeEduUrl(String raw) {
+        String u = raw == null ? "" : raw.trim();
+        if (u.isEmpty()) return "";
+        if (!u.contains("://")) u = "https://" + u;
+        return u;
+    }
+
+    /**
+     * 教务系统一键导入（流程参考 WakeUp 课程表）：
+     * 叠一层独立浏览器 → 用户在教务页自己登录 → 点到课表界面 → 点「导入当前页」。
+     * 这层 WebView 只用来浏览，账号密码不经过 Java、不写入本 App 的任何存储。
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    void openEduImport(String url) {
+        final String target = normalizeEduUrl(url);
+        if (target.isEmpty()) return;
+        if (eduOverlay != null) {
+            eduView.loadUrl(target);
+            return;
+        }
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setBackgroundColor(0xFF12131B);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(12, 10, 12, 10);
+        bar.setBackgroundColor(0xFF1C1D28);
+        eduAddr = new TextView(this);
+        eduAddr.setTextColor(0xFFA3A9B8);
+        eduAddr.setTextSize(12);
+        eduAddr.setSingleLine(true);
+        eduAddr.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        eduAddr.setText(target);
+        bar.addView(eduAddr, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button back = smallButton("‹", v -> {
+            if (eduView != null && eduView.canGoBack()) eduView.goBack();
+        });
+        Button capture = smallButton("导入当前页", v -> captureEduPage());
+        Button close = smallButton("×", v -> closeEduImport());
+        bar.addView(back);
+        bar.addView(capture);
+        bar.addView(close);
+        overlay.addView(bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        eduView = new WebView(this);
+        WebSettings es = eduView.getSettings();
+        es.setJavaScriptEnabled(true);
+        es.setDomStorageEnabled(true);
+        es.setDatabaseEnabled(true);
+        es.setAllowFileAccess(false);
+        es.setAllowContentAccess(false);
+        es.setUseWideViewPort(true);
+        es.setLoadWithOverviewMode(true);
+        es.setSupportZoom(true);
+        es.setBuiltInZoomControls(true);
+        es.setDisplayZoomControls(false);
+        // 老教务常是 http 页面里嵌 http 资源；只允许它，不抬高主页面的混合内容策略
+        es.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cm.setAcceptThirdPartyCookies(eduView, true);
+        }
+        eduView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView v, String u) {
+                if (eduAddr != null) eduAddr.setText(u);
+            }
+        });
+        eduView.setWebChromeClient(new WebChromeClient());
+        overlay.addView(eduView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        eduOverlay = overlay;
+        rootLayout.addView(eduOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        eduView.loadUrl(target);
+    }
+
+    private Button smallButton(String text, View.OnClickListener fn) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setTextColor(0xFFECEEF4);
+        b.setPadding(10, 4, 10, 4);
+        b.setOnClickListener(fn);
+        return b;
+    }
+
+    /** 抓当前页 HTML（连同同域 iframe），去掉密码框的值，分块回传给主页面解析 */
+    void captureEduPage() {
+        if (eduView == null) return;
+        final String js = "(function(){"
+                + "function grab(d){try{"
+                + "var ps=d.querySelectorAll('input[type=password]');"
+                + "for(var i=0;i<ps.length;i++){ps[i].setAttribute('value','');}"
+                + "return d.documentElement?d.documentElement.outerHTML:'';}catch(e){return ''}}"
+                + "var h=grab(document);"
+                + "var fs=document.querySelectorAll('iframe,frame');"
+                + "for(var j=0;j<fs.length;j++){try{var d=fs[j].contentDocument;"
+                + "if(d&&d.body){h+='\\n<!--FRAME-->'+grab(d);}}catch(e){}}"
+                + "return JSON.stringify({url:location.href,title:document.title,"
+                + "html:h.substring(0,600000)});"
+                + "})()";
+        try {
+            eduView.evaluateJavascript(js, value -> {
+                try {
+                    Object v = value == null ? null : new JSONTokener(value).nextValue();
+                    if (!(v instanceof String)) {
+                        bridge.emitEduError("没有读到页面内容");
+                        return;
+                    }
+                    JSONObject o = new JSONObject((String) v);
+                    bridge.emitEdu(o.optString("url", ""), o.optString("title", ""), o.optString("html", ""));
+                } catch (Throwable e) {
+                    bridge.emitEduError("页面解析失败：" + e.getMessage());
+                }
+            });
+        } catch (Throwable e) {
+            bridge.emitEduError("无法读取当前页：" + e.getMessage());
+        }
+    }
+
+    void closeEduImport() {
+        if (eduOverlay == null) return;
+        // 用户点「×」或返回键退出时，通知前端取消等待，别留一个悬挂的 Promise
+        if (bridge != null) bridge.emitEduError("已取消");
+        rootLayout.removeView(eduOverlay);
+        if (eduView != null) {
+            try {
+                eduView.loadUrl("about:blank");
+                eduView.destroy();
+            } catch (Throwable ignore) {
+            }
+        }
+        eduView = null;
+        eduAddr = null;
+        eduOverlay = null;
     }
 
     /** 通知渠道：Android 8+ 必须先建渠道，否则通知会被静默丢弃（两个渠道见 Reminders） */
@@ -247,6 +413,12 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // 教务浏览器在最上层：返回键先回退网页，退到头了再关掉这层，不退出 App
+        if (eduOverlay != null) {
+            if (eduView != null && eduView.canGoBack()) eduView.goBack();
+            else closeEduImport();
+            return;
+        }
         if (webView == null) {
             super.onBackPressed();
             return;
@@ -263,6 +435,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closeEduImport();
         if (bridge != null) bridge.shutdown();
         if (server != null) server.stop();
         if (webView != null) {
@@ -630,6 +803,46 @@ public class MainActivity extends Activity {
                 WidgetProvider.updateAll(ctx);
             } catch (Throwable ignore) {
             }
+        }
+
+        // ------------------------------------------------------------ 教务系统一键导入
+
+        /** 抓取结果分块回传：课表页 HTML 可能几百 KB，一次塞进 evaluateJavascript 不稳妥 */
+        void emitEdu(String url, String title, String html) {
+            final String body = html == null ? "" : html;
+            final int CH = 24000;
+            int n = (body.length() + CH - 1) / CH;
+            if (n == 0) n = 1;
+            for (int i = 0; i < n; i++) {
+                int from = i * CH;
+                int to = Math.min(body.length(), from + CH);
+                String part = from < body.length() ? body.substring(from, to) : "";
+                emit("edu", payload("", "i", i, "n", n, "text", part,
+                        "url", url == null ? "" : url, "title", title == null ? "" : title));
+            }
+        }
+
+        void emitEduError(String msg) {
+            emit("edu", payload("", "i", 0, "n", 1, "text", "", "error", msg == null ? "导入失败" : msg));
+        }
+
+        /** 打开内置教务浏览器（独立 WebView，登录态与主页面隔离） */
+        @JavascriptInterface
+        public void openEduImport(String url) {
+            ((Activity) ctx).runOnUiThread(() -> ((MainActivity) ctx).openEduImport(url));
+        }
+
+        @JavascriptInterface
+        public void closeEduImport() {
+            ((Activity) ctx).runOnUiThread(() -> ((MainActivity) ctx).closeEduImport());
+        }
+
+        @JavascriptInterface
+        public void eduGoBack() {
+            ((Activity) ctx).runOnUiThread(() -> {
+                WebView v = ((MainActivity) ctx).eduView;
+                if (v != null && v.canGoBack()) v.goBack();
+            });
         }
     }
 }
