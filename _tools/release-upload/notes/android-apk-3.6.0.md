@@ -46,5 +46,5 @@
 
 ## 六、产物与验收
 
-- APK：`todo-link-3.6.0.apk`，397,580 字节，SHA-256 `06e73b6dfaf324026b4d59b5b224241e7a8e4fc5c6e8be9ac5c835a509a81e1b`
+- APK：`todo-link-3.6.0.apk`，397,580 字节，SHA-256 `776ee728f0950628defb0dcb523015e373d11f6344ee5ab5d6ebc63916bf1a07`
 - 真机路径：我的 → 课表 → 导入 → AI 识别 PDF 课表 → 选 PDF → 核对黄色项 → 覆盖导入 / 追加到现有
