@@ -32,7 +32,9 @@
     "android-apk-3.4.0",
     "xhub-ext-3.4.0",
     "android-apk-3.5.0",
-    "xhub-ext-3.5.0"
+    "xhub-ext-3.5.0",
+    "android-apk-3.6.0",
+    "xhub-ext-3.6.0"
   ],
   "results": [
     {
@@ -574,11 +576,47 @@
       "commit": "af2cb35f5caf0a625e3f4856dc3a647b3db005c9",
       "notes": "# 扩展 3.5.0\n\n跟随安卓端 3.5.0 的元数据同步版，**没有功能改动**。\n\n## 变更\n\n- `manifest.json` 版本号 3.4.0 → 3.5.0。\n- 扩展页「下载安卓端」入口改指向 `android-v3.5.0` / `todo-link-3.5.0.apk`，说明链接同步，APK 体积更新为 377,027 字节。\n- 文件传输测试用例里模拟设备的 `appVersion` 同步为 3.5.0。\n\n## 兼容性\n\n- 同步协议不变（`PROTO 2`），五个集合与服务端接口和 3.4.0 完全一致；旧版手机端可继续配对使用。\n- 手机端新拆出的「手机应用」只存在手机本地，不进 `resources` 集合、不同步到电脑，因此扩展看不到也不会改写这部分数据。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/files.mjs         # 37 项\nnode tests/e2e.mjs           # 41 项\nnode tests/security.mjs      # 28 项\nnode _tools/pack-extension.mjs --check\n```\n\n## 产物\n\n- `com.zhou.todo-relay-3.5.0.zip`，93,068 字节\n- SHA-256 `26c8a5e113a833b95c7ff5cbcaea2a38c2080eff6932f96c7b93b5972cc0dc56`",
       "releaseName": "待办同步扩展 · x-hub v3.5.0"
+    },
+    {
+      "id": "android-apk-3.6.0",
+      "version": "3.6.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-3.6.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 397580,
+      "sha256": "776ee728f0950628defb0dcb523015e373d11f6344ee5ab5d6ebc63916bf1a07",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.6.0/todo-link-3.6.0.apk",
+      "uploadedAt": "2026-11-08T16:31:43.666Z",
+      "tag": "android-v3.6.0",
+      "commit": "d3076eb06343383515044db7b25a103eed6369bd",
+      "notes": "# 安卓端 3.6.0（versionCode 30）\n\n课表导入新增 **AI 自动识别**：上传教务导出的 PDF，由 AI 抽出课程名称、上课时间、地点、教师、周次，映射到课表模型，先预览校正再导入。\n\n## 一、两条识别链路，自动选\n\n| 条件 | 走哪条 | 发给模型的内容 |\n| --- | --- | --- |\n| PDF 文本层够长、够干净、含中文 | 文本模式 | 抽取出的文字（保留换行） |\n| 没有文本层 / 抽出乱码 / 扫描件 | 图片模式 | 每页渲染成 JPEG，内联成 data URL |\n\n判定阈值：`字符数 ≥ 40`、`可读比例 ≥ 0.6`、`中文字符 ≥ 8`。不达标自动转图片，**不会把乱码当课表**。图片模式需要带视觉的模型（gpt-4o / qwen-vl / glm-4v 等）；不支持时页面明确提示换模型或改用「粘贴文字让 AI 识别」。\n\n## 二、识别结果不是直接写库\n\n- 每条课程逐项可改：名称、星期、节次起止、周次起止、单双周、地点、教师；每条可删除。\n- 待确认分两级：**橙色**（星期/节次/周次缺失或越界、模型自报低置信度）会阻止直接导入并二次确认；**灰色**（缺地点/教师）只提示。\n- 顶部实时统计「N 条 · M 条待确认」；导入时可补开学日期，用于算第几周与单双周。\n- 覆盖导入 / 追加到现有，沿用原有课表写入逻辑。\n\n## 三、关键代码模块\n\n| 文件 | 职责 |\n| --- | --- |\n| `PdfIngest.java`（新增） | 页数/加密判断、文本层抽取与质量评分、逐页渲染 JPEG 到私有缓存 |\n| `AssetServer.java` | 新增 `/__pdfpage/` 同源路由（白名单文件名、防目录穿越） |\n| `MainActivity.java` | Bridge 新增 `pdfInfo / pdfText / pdfRender / pdfClear`；`pickFileTyped` 按 MIME 过滤 |\n| `lib/pdfImport.js`（新增） | 提示词、请求体、响应解包、JSON 抽取、字段归一化、去重、复验 |\n| `lib/native.js` | `pickPdf / pdf* / imageToDataUrl` 封装 |\n| `pages/timetable.js` | AI 入口、进度与取消、可编辑预览、写入 |\n| `app.css` | `.ai-*` 样式；确认框层级提到最高（修掉被预览遮罩挡住点不到的 bug） |\n\n## 四、隐私与边界\n\n- PDF 只在本机读取、渲染、抽文本；只有文本或页面图会发给你自己配置的接口，不经过第三方。\n- 最多渲染 4 页；单次最多 200 条课程。\n- 不做 OCR：扫描件靠视觉模型，看不懂时提示而不是硬猜。\n- 一门课只支持一个连续周次段，\"2-3,8-17\" 会拆成两条（数据模型限制，不是重复识别）。\n- 文本抽取是尽力而为：不解析对象流里的字体定义，少数 PDF 会串字，质量分低时自动转图片。\n\n## 五、验证\n\n- 单测 128 项全通过（新增 `pdf-import` 30 项）。\n- 新增端到端 `pdf-ai-check` 30 项：入口与配置引导、文本/图片两种请求体、待确认标记、改名改星期后导入、二次确认、非 JSON 失败、空结果、粘贴文字入口、追加导入、缓存清理。\n- 既有回归全绿：home 100、nav 两套、tab-gesture 22、ai-history 34、school-list 17、app-shortcuts 28。\n\n## 六、产物与验收\n\n- APK：`todo-link-3.6.0.apk`，397,580 字节，SHA-256 `776ee728f0950628defb0dcb523015e373d11f6344ee5ab5d6ebc63916bf1a07`\n- 真机路径：我的 → 课表 → 导入 → AI 识别 PDF 课表 → 选 PDF → 核对黄色项 → 覆盖导入 / 追加到现有",
+      "releaseName": "待办同步 安卓端 v3.6.0"
+    },
+    {
+      "id": "xhub-ext-3.6.0",
+      "version": "3.6.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-3.6.0.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 93068,
+      "sha256": "1d8eff073734e88c9ea966aabee89b5969a7f176c864fdb8cdd6d24153637530",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v3.6.0/com.zhou.todo-relay-3.6.0.zip",
+      "uploadedAt": "2026-11-08T16:31:45.826Z",
+      "tag": "xhub-ext-v3.6.0",
+      "commit": "2afed5dbb629cc8876400611818cda82a5fdc185",
+      "notes": "# x-hub 待办同步扩展 3.6.0\n\n本次为元数据跟随发布，扩展功能与 3.5.0 一致。\n\n## 变更\n\n- `manifest.json` 版本号 → 3.6.0。\n- 扩展视图的「下载安卓端」入口指向 `android-v3.6.0` 的 APK，并更新体积（397,580 字节）。\n\n## 说明\n\n扩展本体没有功能改动；安卓端 3.6.0 新增了课表的 AI 自动识别导入（PDF → 课程 → 可校正预览）。\n两端协议（PROTO 2）未变，扩展与旧版安卓端仍可互通。",
+      "releaseName": "待办同步扩展 · x-hub v3.6.0"
     }
   ],
   "counts": {
-    "total": 30,
-    "success": 0,
+    "total": 32,
+    "success": 2,
     "failed": 0,
     "skipped": 30,
     "unprocessed": 0
@@ -588,6 +626,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-08T15:55:22.676Z",
-  "finishedAt": "2026-11-08T15:55:28.168Z"
+  "startedAt": "2026-11-08T16:31:35.781Z",
+  "finishedAt": "2026-11-08T16:31:45.826Z"
 }
