@@ -24,7 +24,9 @@
     "android-apk-3.0.0",
     "xhub-ext-3.0.0",
     "android-apk-3.1.0",
-    "xhub-ext-3.1.0"
+    "xhub-ext-3.1.0",
+    "android-apk-3.2.0",
+    "xhub-ext-3.2.0"
   ],
   "results": [
     {
@@ -394,12 +396,12 @@
       "file": "android/todo-link-3.1.0.apk",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 262052,
       "sha256": "997a7e29148843cd64fbe0ff62ecc69292431079d8d22d9258a58c5514e14949",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.1.0/todo-link-3.1.0.apk",
-      "uploadedAt": "2026-11-08T10:14:45.292Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "android-v3.1.0",
       "commit": "8c9c70094e8c5c8a955e6a778783c0abd1f0f55f",
       "notes": "# 安卓端 3.1.0（versionCode 25）\n\n大版本更新：新增称呼、课表、倒数日、桌面小组件，并增强后台保活与底栏动效。\n\n## 新增\n\n- **首次称呼设置**：首次打开弹出「希望我怎么称呼你」强制弹窗（不可关闭），提交后应用到首页问候、AI 对话与每日一句；「我的 → 称呼」可随时改。\n- **每日一句称呼替换**：语料新增 `{name}` 占位，设置称呼后自动替换成你的称呼（未设置回退「朋友」）。\n- **课表**：我的 → 课表，支持手动录入课程（星期/节次/单双周/周次）、按周查看、开学日期、JSON 剪贴板导入导出；教务系统一键导入为后续版本预留接入位。\n- **今日课表卡片**：首页新增，只展示当天课程。\n- **倒数日**：我的 → 倒数日，记录重要日子；首页卡片展示天数，支持左右滑动翻页切换下一个倒数日。\n- **底栏动效（酷安式）**：点击图标做「放大 → 回弹 → 落定」果冻弹跳，高亮块切换带 overshoot 回弹；拖拽跟手放大保留。\n- **后台保活**：设置 → 后台运行，低优先级前台服务保活，后台也能收提醒与同步（通知栏常驻一条）。\n- **桌面小组件**：可添加到桌面，展示待办摘要与今日课表。\n\n## 兼容性\n\n- 同步协议仍是 `PROTO 2`，`versionCode 25` 可直接覆盖安装，本地数据不受影响。\n- 课表/倒数日/称呼都存本地，不依赖电脑。\n\n## 验证\n\n```\nnode _tools/home-check.mjs           # 100 项（含称呼弹窗、新卡片）\nnode _tools/nav-v5-check.mjs         # 底栏 5 格 + 果冻动效\nnode _tools/navbar-check.mjs         # 5 视口几何\nnode --experimental-default-type=module --test android/tests/*.test.mjs  # 65 项\n```\n\n## 产物\n\n- `todo-link-3.1.0.apk`，262,052 字节\n- SHA-256 `997a7e29148843cd64fbe0ff62ecc69292431079d8d22d9258a58c5514e14949`",
@@ -412,23 +414,59 @@
       "file": "dist/com.zhou.todo-relay-3.1.0.zip",
       "source": "manifest",
       "order": null,
-      "status": "success",
-      "reason": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
       "bytes": 93067,
       "sha256": "9038a1c406c042ad376c1b82a1d97bf1d11f10dade283b620bfe08844ab5bcc7",
-      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v3.1.0/com.zhou.todo-relay-3.1.0.zip",
-      "uploadedAt": "2026-11-08T10:14:47.362Z",
+      "target": null,
+      "uploadedAt": null,
       "tag": "xhub-ext-v3.1.0",
       "commit": "8c9c70094e8c5c8a955e6a778783c0abd1f0f55f",
       "notes": "# 扩展 3.1.0\n\n新增文件传输自定义保存位置。\n\n## 新增\n\n- **文件保存位置**：文件面板新增「保存到」设置，可指定自定义目录，手机发来的文件落到该目录；也可一键恢复默认收件箱。\n- 服务端 `/api/local/files/savedir`（GET/POST），保存目录持久化在 `.data/files/save-dir.txt`。\n\n## 兼容性\n\n- 扩展 `3.0.0 → 3.1.0`，同步协议不变（`PROTO 2`）。\n- 未设置时默认收件箱，与旧版行为完全一致。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/files.mjs         # 37 项\nnode tests/e2e.mjs           # 41 项\nnode tests/security.mjs      # 28 项\n```\n\n## 产物\n\n- `com.zhou.todo-relay-3.1.0.zip`，93,067 字节\n- SHA-256 `9038a1c406c042ad376c1b82a1d97bf1d11f10dade283b620bfe08844ab5bcc7`",
       "releaseName": "待办同步扩展 · x-hub v3.1.0"
+    },
+    {
+      "id": "android-apk-3.2.0",
+      "version": "3.2.0",
+      "kind": "android-apk",
+      "file": "android/todo-link-3.2.0.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
+      "bytes": 278503,
+      "sha256": "c4127deb8a59de0b85c24a7b4c17a1b7cc204e46ca85d69626be41e143a95ddd",
+      "target": null,
+      "uploadedAt": null,
+      "tag": "android-v3.2.0",
+      "commit": "6e5e3e70c9eadf3ed44b8952fad7efa5a7d7f3ed",
+      "notes": "# 安卓端 3.2.0（versionCode 26）\n\n修复底栏滑动换页时的窗口闪动，提升跟手度；把 WakeUp 课程表式的「教务系统一键导入」真正内置；补齐每日一句成对引号。\n\n## 修复与改进\n\n- **底栏切页闪动**：定位到两个根因并分别处理。\n  1. 高亮块内层原本带 `backdrop-filter: blur(14px)`，跟着手指移动时 WebView 每帧重新采样背景 → 整窗闪一下；已改为半透明实色 + 合成层位移（`translate3d`），拖拽期间连胶囊本体的模糊也一并关闭。\n  2. 松手后要等 `hashchange` 才更新 `--tab-i`，高亮块会先弹回原格再跳到目标格；现在松手即把目标格写入，位移连续，另加弹性吸附过渡。\n  同时移除点按脉冲里的 `void offsetWidth` 强制同步布局（改用 Web Animations），手势切页不再叠加果冻动画。\n- **滑动灵敏度 / 丝滑度**：起手阈值 6px → 3px；方向判定放宽；`pointermove` 用 `requestAnimationFrame` 合帧写样式；边界阻尼 0.32 → 0.18；新增「短促轻扫」判定（位移不足半格但划得快也能翻一格），普通拖动仍严格按位移吸附，不会误跳多格；切页后按页面记忆滚动位置，不再跳回顶部。\n- **教务系统一键导入**：按 WakeUp 课程表 6.5.2 的流程实现（其 `assets/empty.html` 明确写着「输入网址 → 点确定 → 点到课表界面 → 点右下角导入」）。课表页「导入 → 教务系统一键导入」→ 填学校教务首页地址 → 在 App 内置浏览器里自己登录 → 点到课表页 → 点顶部「导入当前页」→ 抓取页面 HTML（含同域 iframe、抹掉密码框的值）→ 本机解析 → 预览 → 覆盖 / 追加写入。\n  - 解析器支持教务导出的 JSON（如 `course_name / weekday / period_start / period_end / weeks / location / teacher`）、嵌套接口 JSON（`kbList / data / rows` 等）、以及正方 / URP 风格的课表 HTML 表格；多段周次 `2-3,8-17` 会拆成多条记录，单双周、节次、教师、地点一并识别。\n  - 额外提供「粘贴 JSON / 页面源码」「粘贴 HTML 源码」两条兜底路径，浏览器预览环境也能用。\n- **每日一句**：补齐右引号，卡片由原来的单个 `“` 改为 `“ … ”` 成对显示。\n\n## 兼容性与隐私\n\n- 同步协议仍是 `PROTO 2`，`versionCode 26` 可直接覆盖安装，本地数据不受影响；签名证书与 3.1.0 一致。\n- 教务账号密码只输在教务系统自己的页面里，本 App 不读取、不保存、不上传；抓到的页面源码只在内存中分块传给本机页面解析，不落盘、不出网。\n\n## 已知限制（如实说明）\n\n- **学校教务网址需自己填**：各校地址不同且会变，WakeUp 自带的学校库是加密资源，本版没有内置也没有编造校方地址；类型选项只影响操作提示。\n- 解析器覆盖 JSON 与常见表格结构；若某校课表是纯脚本绘制、无 `<table>`，或一格塞了多门不同周次的课，可能识别不全 —— 此时用「粘贴源码」或手动录入补齐，不会凭空猜造课程。\n- 桌面小组件仍需长按桌面手动添加（3.1.0 起如此）。\n\n## 验证\n\n```\nnode --experimental-default-type=module --test android/tests/*.test.mjs   # 76 项（含新增 11 项教务解析）\nnode _tools/home-check.mjs            # 100 项\nnode _tools/nav-v5-check.mjs          # 底栏 5 格 + 果冻动效\nnode _tools/navbar-check.mjs          # 5 视口几何\nnode _tools/tab-gesture-check.mjs     # 21 项：拖拽跟手/立即吸附/轻扫/滚动位置/引号/教务入口\n```\n\n## 产物\n\n- `todo-link-3.2.0.apk`，278,503 字节，versionCode 26 / versionName 3.2.0\n- SHA-256 `c4127deb8a59de0b85c24a7b4c17a1b7cc204e46ca85d69626be41e143a95ddd`",
+      "releaseName": "待办同步 安卓端 v3.2.0"
+    },
+    {
+      "id": "xhub-ext-3.2.0",
+      "version": "3.2.0",
+      "kind": "xhub-extension",
+      "file": "dist/com.zhou.todo-relay-3.2.0.zip",
+      "source": "manifest",
+      "order": null,
+      "status": "skipped",
+      "reason": "目标软件包已存在同名产物，幂等跳过",
+      "bytes": 93067,
+      "sha256": "8c0265baed047a699159c7a8d0b22056669dda4e057b94130a74e41bd56e01ff",
+      "target": null,
+      "uploadedAt": null,
+      "tag": "xhub-ext-v3.2.0",
+      "commit": "6e5e3e70c9eadf3ed44b8952fad7efa5a7d7f3ed",
+      "notes": "# 扩展 3.2.0\n\n跟随安卓端 3.2.0 的元数据同步版，**没有功能改动**。\n\n## 变更\n\n- `manifest.json` 版本号 3.1.0 → 3.2.0。\n- 扩展页「下载安卓端」入口改指向 `android-v3.2.0` / `todo-link-3.2.0.apk`，说明链接同步，APK 体积更新为 278,503 字节。\n- 文件传输测试用例里模拟设备的 `appVersion` 同步为 3.2.0。\n\n## 兼容性\n\n- 同步协议不变（`PROTO 2`），服务端接口与 3.1.0 完全一致；旧版手机端可继续配对使用。\n- 不设置自定义保存目录时，行为与 3.1.0 相同。\n\n## 验证\n\n```\ncd extensions/todo-relay\nnode tests/files.mjs         # 37 项\nnode tests/e2e.mjs           # 41 项\nnode tests/security.mjs      # 28 项\nnode _tools/pack-extension.mjs --check\n```\n\n## 产物\n\n- `com.zhou.todo-relay-3.2.0.zip`，93,067 字节\n- SHA-256 `8c0265baed047a699159c7a8d0b22056669dda4e057b94130a74e41bd56e01ff`",
+      "releaseName": "待办同步扩展 · x-hub v3.2.0"
     }
   ],
   "counts": {
-    "total": 22,
-    "success": 2,
+    "total": 24,
+    "success": 0,
     "failed": 0,
-    "skipped": 20,
+    "skipped": 24,
     "unprocessed": 0
   },
   "failure": null,
@@ -436,6 +474,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-08T10:14:37.569Z",
-  "finishedAt": "2026-11-08T10:14:47.362Z"
+  "startedAt": "2026-11-08T11:30:49.189Z",
+  "finishedAt": "2026-11-08T11:30:54.684Z"
 }
