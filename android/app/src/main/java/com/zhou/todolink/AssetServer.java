@@ -57,14 +57,17 @@ final class AssetServer implements Runnable {
     private final AssetManager assets;
     /** 系统应用图标的私有缓存目录；null 表示不提供 /__appicon/ */
     private final File iconDir;
+    /** 课表 PDF 渲染出的页面图缓存；null 表示不提供 /__pdfpage/ */
+    private final File pdfDir;
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private ServerSocket server;
     private Thread thread;
     private volatile boolean running;
 
-    AssetServer(AssetManager assets, File iconDir) {
+    AssetServer(AssetManager assets, File iconDir, File pdfDir) {
         this.assets = assets;
         this.iconDir = iconDir;
+        this.pdfDir = pdfDir;
     }
 
     int start() throws IOException {
@@ -167,6 +170,18 @@ final class AssetServer implements Runnable {
                     write(socket.getOutputStream(), 404, "text/plain; charset=utf-8", "no icon".getBytes("UTF-8"));
                 } else {
                     write(socket.getOutputStream(), 200, "image/png", icon);
+                }
+                return;
+            }
+
+            // 课表 PDF 的页面渲染图（PdfIngest 写缓存）。同样只按白名单文件名取，
+            // 这样页面能同源 fetch 成 data URL 再交给模型，PDF 本身不出本机。
+            if (path.startsWith("/__pdfpage/")) {
+                byte[] page = pdfDir == null ? null : PdfIngest.readPage(pdfDir, path.substring("/__pdfpage/".length()));
+                if (page == null) {
+                    write(socket.getOutputStream(), 404, "text/plain; charset=utf-8", "no page".getBytes("UTF-8"));
+                } else {
+                    write(socket.getOutputStream(), 200, "image/jpeg", page);
                 }
                 return;
             }

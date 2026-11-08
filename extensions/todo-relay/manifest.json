@@ -1,7 +1,7 @@
 {
   "id": "com.zhou.todo-relay",
   "name": "待办同步",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "runtime": "service",
   "kind": "view",
   "surfaces": [

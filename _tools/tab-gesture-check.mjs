@@ -114,7 +114,7 @@ try {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.5.0',
+      appVersion: () => '3.6.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -209,7 +209,9 @@ try {
   await page.waitForTimeout(200)
   const opts = await page.evaluate(() => [...document.querySelectorAll('.imp-opt b')].map((x) => x.textContent))
   check('导入选项包含「教务系统一键导入」', opts.includes('教务系统一键导入'), JSON.stringify(opts))
-  await page.click('.imp-opt:first-child')
+  check('导入选项包含「AI 识别 PDF 课表」', opts.includes('AI 识别 PDF 课表'), JSON.stringify(opts))
+  // 按文本点，不按序号：以后再加导入方式也不会点错
+  await page.locator('.imp-opt', { hasText: '教务系统一键导入' }).click()
   await page.waitForTimeout(200)
   const edu = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.lib-card')].pop()

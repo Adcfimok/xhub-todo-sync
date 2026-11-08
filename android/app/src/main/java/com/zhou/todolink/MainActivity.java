@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         try {
-            server = new AssetServer(getAssets(), AppCatalog.iconDir(this));
+            server = new AssetServer(getAssets(), AppCatalog.iconDir(this), PdfIngest.pageDir(this));
             server.start();
         } catch (Exception e) {
             Toast.makeText(this, "本地资源服务启动失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -726,19 +726,55 @@ public class MainActivity extends Activity {
         /** 打开系统文件选择器（SAF）。不申请存储权限，只拿用户点选的那一个文件 */
         @JavascriptInterface
         public void pickFile(final String reqId) {
+            openPicker(reqId, "*/*");
+        }
+
+        /** 同上，但按 MIME 过滤：课表 PDF 只列 PDF，避免用户在相册里翻半天 */
+        @JavascriptInterface
+        public void pickFileTyped(final String reqId, final String mime) {
+            openPicker(reqId, mime == null || mime.trim().isEmpty() ? "*/*" : mime.trim());
+        }
+
+        private void openPicker(final String reqId, final String mime) {
             final MainActivity act = (MainActivity) ctx;
             act.runOnUiThread(() -> {
                 try {
                     act.pickReqId = reqId;
                     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     i.addCategory(Intent.CATEGORY_OPENABLE);
-                    i.setType("*/*");
+                    i.setType(mime);
                     i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
                     act.startActivityForResult(i, REQ_PICK_FILE);
                 } catch (Throwable e) {
                     emit("pick", payload(reqId, "ok", false, "error", "打不开文件选择器：" + e.getMessage()));
                 }
             });
+        }
+
+        // ---------------------------------------------------------- 课表 PDF（本地预处理）
+
+        /** PDF 元信息：页数、是否可渲染、是否加密。不联网、不解析课程 */
+        @JavascriptInterface
+        public String pdfInfo(String uri) {
+            return PdfIngest.infoJson(ctx, uri);
+        }
+
+        /** PDF 文本层抽取（尽力而为）；页面按 quality 决定用文本还是走视觉 */
+        @JavascriptInterface
+        public String pdfText(String uri) {
+            return PdfIngest.textJson(ctx, uri);
+        }
+
+        /** 渲染某一页为 JPEG，返回 /__pdfpage/<hash>_p<n>.jpg 同源地址 */
+        @JavascriptInterface
+        public String pdfRender(String uri, int page, double scale) {
+            return PdfIngest.renderJson(ctx, uri, page, scale);
+        }
+
+        /** 导入结束/取消时清缓存，避免长期占空间 */
+        @JavascriptInterface
+        public void pdfClear() {
+            PdfIngest.clear(ctx);
         }
 
         /** 手机 → 电脑：分块加密上传，进度通过 transfer 事件回传 */

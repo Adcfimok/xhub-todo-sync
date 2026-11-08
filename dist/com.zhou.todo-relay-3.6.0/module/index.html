@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>待办同步</title>
+<style>
+  /* 卡片规范 v1.0（docs/02）：宿主已套玻璃外壳，这里 body 透明，只负责 12px 留白与排版。
+     视口 = 内容区，可能只有 153×34；所有尺寸跟 cqh 缩放，溢出由 overflow 兜底。 */
+  :root {
+    color-scheme: light;
+    --ink: var(--xhub-text-1, #1f2230);
+    --ink-2: var(--xhub-text-2, #5b6070);
+    --ink-3: var(--xhub-text-3, #8b90a0);
+    --line: var(--xhub-border, rgba(0, 0, 0, .1));
+    --tile: rgba(0, 0, 0, .035);
+    --accent: var(--xhub-accent, #5b6cff);
+    --green: var(--xhub-green, #17864b);
+    --orange: var(--xhub-orange, #b45309);
+    --red: var(--xhub-red, #c0392b);
+    --blue: var(--xhub-blue, #2f6fd0);
+    --fs-metric: clamp(16px, 13cqh, 24px);
+    --fs-body: clamp(11px, 6.8cqh, 13px);
+    --fs-label: clamp(9.5px, 5.6cqh, 11px);
+  }
+  :root[data-xhub-theme='dark'] {
+    color-scheme: dark;
+    --ink: var(--xhub-text-1, #e8e9f0);
+    --ink-2: var(--xhub-text-2, #a2a7b8);
+    --ink-3: var(--xhub-text-3, #767c8f);
+    --line: var(--xhub-border, rgba(255, 255, 255, .12));
+    --tile: rgba(255, 255, 255, .06);
+    --green: var(--xhub-green, #4ade80);
+    --orange: var(--xhub-orange, #fb923c);
+    --red: var(--xhub-red, #f87171);
+    --blue: var(--xhub-blue, #7aa2ff);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    padding: 12px;
+    height: 100%;
+    background: transparent;
+    color: var(--ink);
+    font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: var(--fs-body);
+    line-height: 1.3;
+    container: card / size;
+    overflow: hidden;
+    cursor: pointer;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--ink-3); }
+  [data-state='online'] .dot, .dot[data-state='online'] { background: var(--green); }
+  [data-state='syncing'] .dot, .dot[data-state='syncing'] { background: var(--blue); }
+  [data-state='conflict'] .dot, .dot[data-state='conflict'] { background: var(--orange); }
+  [data-state='offline'] .dot, .dot[data-state='offline'] { background: var(--ink-3); }
+  [data-state='error'] .dot, .dot[data-state='error'] { background: var(--red); }
+
+  /* ---------- XS：单行 ---------- */
+  .compact-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 100%;
+    min-width: 0;
+  }
+  .compact-row .big {
+    font-size: var(--fs-metric);
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .compact-row .cap {
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .compact-row .tail {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--fs-label);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
+  /* ---------- S/M：指标 + 列表 ---------- */
+  .full { display: none; height: 100%; flex-direction: column; gap: clamp(4px, 3cqh, 8px); min-height: 0; }
+  .tiles { display: flex; gap: clamp(4px, 2.4cqh, 7px); flex: none; min-width: 0; }
+  .tile {
+    flex: 1;
+    min-width: 0;
+    padding: clamp(3px, 2cqh, 6px) clamp(5px, 1.6cqw, 9px);
+    border-radius: 8px;
+    background: var(--tile);
+    border: 1px solid var(--line);
+  }
+  .tile b {
+    display: block;
+    font-size: var(--fs-metric);
+    font-weight: 650;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .tile span {
+    display: block;
+    margin-top: 1px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tile[data-tone='warn'] b { color: var(--orange); }
+  .tile[data-tone='sync'] b { color: var(--blue); }
+
+  .rows { display: none; flex-direction: column; gap: clamp(2px, 1.6cqh, 5px); min-height: 0; overflow: hidden; flex: 1; }
+  .row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .row .nm {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink-2);
+  }
+  .row .due { font-size: var(--fs-label); color: var(--ink-3); white-space: nowrap; }
+  .row[data-tone='late'] .nm, .row[data-tone='late'] .due { color: var(--red); }
+
+  .empty-line { color: var(--ink-3); font-size: var(--fs-label); }
+
+  /* ---------- 容器查询：向上增强 ---------- */
+  @container card (min-height: 56px) {
+    .compact-row { display: none; }
+    .full { display: flex; }
+  }
+  @container card (min-height: 76px) {
+    .rows { display: flex; }
+    /* 矮卡只放两条：第 3 条在临界高度下会被裁半行，宁可少给也不要断行 */
+    .row:nth-child(3) { display: none; }
+  }
+  @container card (min-height: 120px) {
+    .row:nth-child(3) { display: flex; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body data-state="offline">
+  <!-- XS：一行说清「还剩几件 + 通没通」 -->
+  <div class="compact-row">
+    <span class="big num" id="c-num">0</span>
+    <span class="cap" id="c-cap">待完成</span>
+    <span class="tail"><i class="dot" data-state="offline"></i><span id="c-state">未连接</span></span>
+  </div>
+
+  <!-- S/M：三磁贴 + 最近待办 -->
+  <div class="full">
+    <div class="tiles">
+      <div class="tile"><b class="num" id="t-pending">0</b><span>待完成</span></div>
+      <div class="tile" id="t-today-box"><b class="num" id="t-today">0</b><span>今日到期</span></div>
+      <div class="tile" id="t-sync-box"><b class="num" id="t-sync">0</b><span id="t-sync-label">待同步</span></div>
+    </div>
+    <div class="rows" id="rows"></div>
+  </div>
+
+<script>
+(function () {
+  'use strict'
+
+  var state = { todos: [], sync: null, phase: 'offline' }
+  var api = window.xhub || null
+
+  function fmtDue(ms) {
+    if (!ms) return ''
+    var d = new Date(ms)
+    var today = new Date()
+    var diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) -
+      new Date(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000)
+    if (diff < 0) return '逾期 ' + (-diff) + ' 天'
+    if (diff === 0) return '今天'
+    if (diff === 1) return '明天'
+    if (diff < 7) return diff + ' 天后'
+    return (d.getMonth() + 1) + '/' + d.getDate()
+  }
+
+  function isToday(ms) {
+    if (!ms) return false
+    var d = new Date(ms), n = new Date()
+    return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()
+  }
+
+  function render() {
+    var live = state.todos.filter(function (t) { return !t.done })
+    var pending = live.length
+    var today = live.filter(function (t) { return isToday(t.due_at || t.dueAt) }).length
+    var sync = state.sync
+
+    document.getElementById('c-num').textContent = String(pending)
+    document.getElementById('t-pending').textContent = String(pending)
+    document.getElementById('t-today').textContent = String(today)
+
+    var phase = 'offline'
+    var label = '未连接'
+    var syncNum = 0
+    var syncLabel = '待同步'
+
+    if (sync && sync.ok) {
+      var online = (sync.devices || []).filter(function (d) { return d.online })
+      var conflicts = (sync.stats && sync.stats.conflicts) || 0
+      syncNum = (sync.stats && sync.stats.pendingHost) || 0
+      syncLabel = '待回写'
+      if (conflicts > 0) { phase = 'conflict'; label = conflicts + ' 条冲突' }
+      else if (syncNum > 0) { phase = 'syncing'; label = '同步中' }
+      else if (online.length > 0) { phase = 'online'; label = online.length + ' 台在线' }
+      else { phase = 'online'; label = '已就绪' }
+    } else if (sync && sync.error) {
+      phase = 'error'
+      label = '后端未响应'
+    }
+
+    document.getElementById('c-state').textContent = label
+    document.getElementById('t-sync').textContent = String(syncNum)
+    document.getElementById('t-sync-label').textContent = syncLabel
+    document.body.setAttribute('data-state', phase)
+    var dots = document.querySelectorAll('.dot')
+    for (var i = 0; i < dots.length; i++) dots[i].setAttribute('data-state', phase)
+    document.getElementById('t-today-box').setAttribute('data-tone', today > 0 ? 'warn' : '')
+    document.getElementById('t-sync-box').setAttribute('data-tone', syncNum > 0 ? 'sync' : '')
+
+    var rows = document.getElementById('rows')
+    var list = live.slice().sort(function (a, b) {
+      var am = a.due_at || a.dueAt || Infinity, bm = b.due_at || b.dueAt || Infinity
+      return am - bm
+    }).slice(0, 3)
+
+    if (!list.length) {
+      rows.innerHTML = '<div class="empty-line">暂无待办</div>'
+      return
+    }
+    rows.innerHTML = list.map(function (t) {
+      var due = t.due_at || t.dueAt
+      var late = due && due < Date.now()
+      return '<div class="row" data-tone="' + (late ? 'late' : '') + '">' +
+        '<i class="dot" data-state="' + (late ? 'error' : 'offline') + '"></i>' +
+        '<span class="nm"></span><span class="due"></span></div>'
+    }).join('')
+    var nodes = rows.querySelectorAll('.row')
+    for (var j = 0; j < nodes.length; j++) {
+      var t = list[j]
+      nodes[j].querySelector('.nm').textContent = t.title || '（未命名）'
+      nodes[j].querySelector('.due').textContent = fmtDue(t.due_at || t.dueAt)
+    }
+  }
+
+  async function loadTodos() {
+    if (!api || !api.data || !api.data.todos) return
+    try {
+      var res = await api.data.todos.list()
+      var list = Array.isArray(res) ? res : (res && (res.data || res.items || res.rows)) || []
+      state.todos = list
+    } catch (e) {
+      state.todos = []
+    }
+  }
+
+  async function loadSync() {
+    if (!api || !api.service) { state.sync = null; render(); return }
+    try {
+      var r = await api.service.request('/api/admin/state')
+      var data = await r.json()
+      state.sync = { ok: true, devices: data.devices || [], stats: data.stats || {} }
+    } catch (e) {
+      state.sync = { error: String(e && e.message || e) }
+    }
+    render()
+  }
+
+  async function refresh() {
+    await loadTodos()
+    render()
+    await loadSync()
+  }
+
+  document.body.addEventListener('click', function () {
+    if (api && api.runtime) api.runtime.open('view')
+  })
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh()
+  })
+
+  refresh()
+  setInterval(refresh, 20000)
+})()
+</script>
+</body>
+</html>

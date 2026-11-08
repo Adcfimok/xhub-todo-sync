@@ -456,3 +456,90 @@ export function launchApp(pkg) {
     return false
   }
 }
+
+// ---------------------------------------------------------------- 课表 PDF
+
+/** 有没有本地 PDF 预处理能力（老 APK 没有，页面据此隐藏入口而不是点了没反应） */
+export function hasPdfIngest() {
+  return !!(bridgeFn('pdfInfo') && bridgeFn('pdfText') && bridgeFn('pdfRender'))
+}
+
+/** 选一个 PDF（系统选择器按 application/pdf 过滤，不申请存储权限） */
+export function pickPdf() {
+  const typed = bridgeFn('pickFileTyped')
+  const plain = bridgeFn('pickFile')
+  if (!typed && !plain) return Promise.reject(new Error('当前环境不支持选择文件'))
+  installHooks()
+  const id = 'd' + Date.now().toString(36) + ++seq
+  return new Promise((resolve, reject) => {
+    const off = onNative('pick', (p) => {
+      if (!p || p.id !== id) return
+      off()
+      if (p.ok) resolve({ uri: p.uri, name: p.name, size: Number(p.size) || 0, mime: p.mime || '' })
+      else reject(new Error(p.error || '已取消'))
+    })
+    try {
+      if (typed) typed(id, 'application/pdf')
+      else plain(id)
+    } catch (e) {
+      off()
+      reject(e)
+    }
+  })
+}
+
+function jsonBridge(name, args) {
+  const fn = bridgeFn(name)
+  if (!fn) return { ok: false, error: '这版 APK 没有内置 PDF 解析，请升级后再试' }
+  try {
+    const v = JSON.parse(String(fn.apply(null, args) || '{}'))
+    return v && typeof v === 'object' ? v : { ok: false, error: '返回格式异常' }
+  } catch (e) {
+    return { ok: false, error: 'PDF 处理失败：' + (e && e.message ? e.message : '未知错误') }
+  }
+}
+
+export function pdfInfo(uri) {
+  return jsonBridge('pdfInfo', [String(uri || '')])
+}
+
+export function pdfText(uri) {
+  return jsonBridge('pdfText', [String(uri || '')])
+}
+
+export function pdfRender(uri, page, scale) {
+  return jsonBridge('pdfRender', [String(uri || ''), Number(page) || 0, Number(scale) || 2])
+}
+
+export function pdfClear() {
+  const fn = bridgeFn('pdfClear')
+  if (!fn) return
+  try {
+    fn()
+  } catch (e) {
+    /* 清缓存失败不影响导入 */
+  }
+}
+
+/**
+ * 把同源图片读成 data URL。
+ * 模型访问不到 127.0.0.1，所以 PDF 页面图必须内联进请求体；
+ * 走 fetch 读本地 HTTP 而不是让原生 base64 回传，避免大字符串顶到 Binder 上限。
+ */
+export function imageToDataUrl(url) {
+  return fetch(String(url || ''), { cache: 'no-store' })
+    .then((res) => {
+      if (!res.ok) throw new Error('读取 PDF 页面图失败（HTTP ' + res.status + '）')
+      return res.arrayBuffer()
+    })
+    .then((buf) => 'data:image/jpeg;base64,' + base64(new Uint8Array(buf)))
+}
+
+function base64(bytes) {
+  let out = ''
+  const chunk = 8192
+  for (let i = 0; i < bytes.length; i += chunk) {
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
+  }
+  return btoa(out)
+}

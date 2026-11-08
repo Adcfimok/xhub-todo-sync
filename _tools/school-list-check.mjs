@@ -52,7 +52,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/i.test(m.text())) errors.push(m.text()) })
   await page.addInitScript(() => {
     window.Android = {
-      originPort: () => 47830, appVersion: () => '3.5.0', deviceName: () => 'test',
+      originPort: () => 47830, appVersion: () => '3.6.0', deviceName: () => 'test',
       readClipboard: () => '', writeClipboard: () => {}, vibrate: () => {}, toast: () => {}, openUrl: () => {},
     }
   })
@@ -69,7 +69,7 @@ try {
   await page.waitForTimeout(300)
   await page.click('.act-grid .btn:nth-child(2)')
   await page.waitForTimeout(180)
-  await page.click('.imp-opt:first-child')
+  await page.locator('.imp-opt', { hasText: '教务系统一键导入' }).click()
   await page.waitForTimeout(180)
 
   const btnText = await page.textContent('.school-pick-btn')

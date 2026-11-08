@@ -1,8 +1,33 @@
 import { S, saveMeta } from '../lib/core.js'
 import { h, toast, confirmAsync, openForm } from '../lib/ui.js'
-import { writeClipboard, hasEduBrowser, openEduImport, closeEduImport, waitEduCapture } from '../lib/native.js'
+import {
+  writeClipboard,
+  hasEduBrowser,
+  openEduImport,
+  closeEduImport,
+  waitEduCapture,
+  hasPdfIngest,
+  pickPdf,
+  pdfInfo,
+  pdfText,
+  pdfRender,
+  pdfClear,
+  imageToDataUrl,
+  requestText,
+} from '../lib/native.js'
 import { EDU_PRESETS, parseEduText, mergeTimetable } from '../lib/edu.js'
 import { SCHOOLS, SCHOOL_SOURCE } from '../lib/schools.js'
+import { PLATFORM_URL, isPlatformLogin, ptToken } from '../lib/platform.js'
+import {
+  MAX_AI_PAGES,
+  buildRequestBody,
+  extractContent,
+  extractJson,
+  mapAiResult,
+  revalidate,
+  summarize,
+  toCourse,
+} from '../lib/pdfImport.js'
 import {
   weekOfTerm,
   coursesOnDay,
@@ -258,6 +283,10 @@ function openImport() {
   const box = h('div', { class: 'lib-card' }, [
     h('div', { class: 'lib-head' }, [h('b', { text: '导入课表' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
     h('div', { class: 'imp-opts' }, [
+      h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromPdf() } }, [
+        h('b', { text: 'AI 识别 PDF 课表' }),
+        h('span', { text: '上传教务导出的 PDF，自动认出课程/时间/地点/周次，可逐条校正' }),
+      ]),
       h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromEdu() } }, [
         h('b', { text: '教务系统一键导入' }),
         h('span', { text: '内置浏览器登录教务 → 进课表页 → 点「导入当前页」' }),
@@ -269,6 +298,10 @@ function openImport() {
       h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromSource('') } }, [
         h('b', { text: '粘贴 HTML 源码' }),
         h('span', { text: '浏览器里「查看网页源代码」复制整页内容' }),
+      ]),
+      h('button', { class: 'imp-opt', type: 'button', onclick: () => { mask.remove(); importFromAiText() } }, [
+        h('b', { text: '粘贴文字让 AI 识别' }),
+        h('span', { text: '图片版课表先复制成文字，或直接粘贴课表截图里认出来的内容' }),
       ]),
     ]),
   ])
@@ -359,6 +392,469 @@ async function exportJson() {
   } catch (e) {
     toast('复制失败，请手动复制')
   }
+}
+
+// ---------------------------------------------------------------- AI 识别导入
+
+/** 文本层要同时满足「够长、可读、含中文」才交给模型，否则退到图片模式 */
+const AI_TEXT_MIN_QUALITY = 0.6
+const AI_TEXT_MIN_CHARS = 40
+const AI_TEXT_MIN_CJK = 8
+
+function aiCfg() {
+  const platform = S.meta.aiPlatform === '1'
+  return {
+    platform,
+    baseURL: platform ? PLATFORM_URL + '/v1' : S.meta.aiBase || '',
+    apiKey: platform ? ptToken() : S.meta.aiKey || '',
+    model: S.meta.aiModel || '',
+  }
+}
+
+/** 配置不全时返回一句人话，页面据此给出「去配置」入口 */
+function aiBlockedReason() {
+  const c = aiCfg()
+  if (c.platform && !isPlatformLogin()) return '平台额度需要登录：我的 → 账号'
+  if (!c.platform && !c.apiKey) return '还没配置 AI 接口：AI 助手 → 设置 → 填一个 OpenAI 兼容接口'
+  if (!c.platform && !c.baseURL) return '还没填接口地址：AI 助手 → 设置'
+  if (!c.model) return '还没选模型：AI 助手 → 设置'
+  return ''
+}
+
+function aiEndpoint(base) {
+  return String(base || '').replace(/\/+$/, '') + '/chat/completions'
+}
+
+/** 配置缺失时的引导卡片：不静默失败，也不把用户丢在原地 */
+function showAiConfigHint(msg) {
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [
+        h('b', { text: 'AI 识别还差一步' }),
+        h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() }),
+      ]),
+      h('p', { class: 'lib-hint', text: msg }),
+      h('p', { class: 'lib-hint', text: '识别会用到你自己的接口或平台额度，PDF 只在本机读取，图片直接发给该接口，不经过第三方。' }),
+      h('div', { class: 'act-grid' }, [
+        h('button', { class: 'btn', type: 'button', text: '知道了', onclick: () => mask.remove() }),
+        h('button', {
+          class: 'btn primary',
+          type: 'button',
+          text: '去配置',
+          onclick: () => {
+            mask.remove()
+            location.hash = '#/ai'
+          },
+        }),
+      ]),
+    ])
+  )
+}
+
+/** 识别过程的进度卡片：只更新一行字和一条进度，不做花哨动画 */
+function showAiProgress(title) {
+  const line = h('p', { class: 'lib-hint', text: '准备中…' })
+  const bar = h('i')
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [
+        h('b', { text: title }),
+        h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => cancel() }),
+      ]),
+      line,
+      h('div', { class: 'ai-progress' }, [bar]),
+    ])
+  )
+  let aborted = false
+  let onAbort = null
+  function cancel() {
+    aborted = true
+    if (onAbort) {
+      try {
+        onAbort()
+      } catch (e) {
+        /* 已经结束 */
+      }
+    }
+    mask.remove()
+  }
+  return {
+    mask,
+    step(text, ratio) {
+      if (aborted) return
+      line.textContent = text
+      bar.style.width = Math.round(Math.max(4, Math.min(1, ratio || 0)) * 100) + '%'
+    },
+    /** 让请求层挂上取消钩子 */
+    bindAbort(fn) {
+      onAbort = fn
+    },
+    get aborted() {
+      return aborted
+    },
+    close() {
+      mask.remove()
+    },
+  }
+}
+
+/** 选 PDF → 判断走文本还是图片 → 调模型 → 解析 → 预览 */
+async function importFromPdf() {
+  const blocked = aiBlockedReason()
+  if (blocked) return showAiConfigHint(blocked)
+  if (!hasPdfIngest()) {
+    toast('这版 APK 没有内置 PDF 解析，请先用「粘贴文字让 AI 识别」或升级 App')
+    return
+  }
+  let file
+  try {
+    file = await pickPdf()
+  } catch (e) {
+    if (!/取消/.test(String(e && e.message))) toast(String((e && e.message) || '选择文件失败'))
+    return
+  }
+  const info = pdfInfo(file.uri)
+  if (!info.ok) return toast(info.error || '打不开这个 PDF')
+  if (!info.pages) return toast('这份 PDF 没有可读取的页面')
+
+  const prog = showAiProgress('AI 正在识别课表')
+  let mode = 'text'
+  try {
+    const pages = Math.min(info.pages, MAX_AI_PAGES)
+    prog.step('读取 PDF…', 0.08)
+    const t = pdfText(file.uri)
+    const textOk = t.ok && t.chars >= AI_TEXT_MIN_CHARS && t.quality >= AI_TEXT_MIN_QUALITY && t.cjk >= AI_TEXT_MIN_CJK
+
+    let payload
+    if (textOk) {
+      mode = 'text'
+      prog.step('文本层可用，正在请求模型…', 0.42)
+      payload = { mode: 'text', text: t.text, meta: { fileName: file.name, pages: info.pages } }
+    } else {
+      mode = 'vision'
+      const images = []
+      for (let i = 0; i < pages; i++) {
+        if (prog.aborted) return
+        prog.step('渲染第 ' + (i + 1) + ' / ' + pages + ' 页…', 0.1 + (0.5 * (i + 1)) / pages)
+        const r = pdfRender(file.uri, i, 2)
+        if (!r.ok) throw new Error(r.error || 'PDF 页面渲染失败')
+        images.push(await imageToDataUrl(r.url))
+      }
+      if (prog.aborted) return
+      prog.step('没有可用文本层，改用图片识别…', 0.68)
+      payload = { mode: 'vision', images, meta: { fileName: file.name, pages: info.pages } }
+    }
+
+    if (prog.aborted) return
+    const c = aiCfg()
+    const ctrl = new AbortController()
+    prog.bindAbort(() => ctrl.abort())
+    prog.step(mode === 'vision' ? '模型正在看图识别（可能需要十几秒）…' : '模型正在识别文本…', 0.8)
+    const raw = await requestText({
+      method: 'POST',
+      url: aiEndpoint(c.baseURL),
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
+      body: buildRequestBody(Object.assign({ model: c.model }, payload)),
+      signal: ctrl.signal,
+    })
+    if (prog.aborted) return
+    prog.step('解析识别结果…', 0.95)
+    const obj = extractJson(extractContent(raw))
+    prog.close()
+    if (!obj) return showAiFail('模型返回的内容不是可解析的 JSON', extractContent(raw), mode)
+    const result = mapAiResult(obj)
+    if (!result.courses.length) return showAiEmpty(result, raw)
+    showAiPreview(result, { mode, fileName: file.name, raw })
+  } catch (e) {
+    prog.close()
+    if (prog.aborted || (e && e.name === 'AbortError')) return
+    const msg = String((e && e.message) || '识别失败')
+    // 视觉模式最常见的是「模型不支持图片」：给出可执行的替代方案，而不是只报错
+    if (mode === 'vision' && /image|vision|multimodal|unsupported|400|content/i.test(msg)) {
+      showAiFail('当前模型可能不支持图片输入', msg + '\n\n可以在「AI 助手 → 设置」换用带视觉的模型（如 gpt-4o、qwen-vl、glm-4v），或改用「粘贴文字让 AI 识别」。', mode)
+    } else {
+      showAiFail('识别没有成功', msg, mode)
+    }
+  } finally {
+    pdfClear()
+  }
+}
+
+/** 没有 PDF 时的等价入口：粘贴文字，走同一条识别与校正链路 */
+function importFromAiText() {
+  const blocked = aiBlockedReason()
+  if (blocked) return showAiConfigHint(blocked)
+  const input = h('textarea', { class: 'input', rows: 8, placeholder: '把课表里的文字粘进来（保留换行，表格一行一行粘即可）' })
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [
+        h('b', { text: '粘贴文字让 AI 识别' }),
+        h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() }),
+      ]),
+      h('p', { class: 'lib-hint', text: '适合扫描件 / 图片课表：先把文字复制出来，或按「课程名 星期 节次 周次 地点 教师」的顺序整理成行。' }),
+      input,
+      h('button', {
+        class: 'btn primary block',
+        type: 'button',
+        text: '开始识别',
+        onclick: async () => {
+          const text = input.value.trim()
+          if (text.length < 10) return toast('内容太短，先粘贴课表文字')
+          mask.remove()
+          await runAiOnText(text)
+        },
+      }),
+    ])
+  )
+}
+
+async function runAiOnText(text) {
+  const prog = showAiProgress('AI 正在识别课表')
+  try {
+    const c = aiCfg()
+    const ctrl = new AbortController()
+    prog.bindAbort(() => ctrl.abort())
+    prog.step('正在请求模型…', 0.4)
+    const raw = await requestText({
+      method: 'POST',
+      url: aiEndpoint(c.baseURL),
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
+      body: buildRequestBody({ mode: 'text', model: c.model, text, meta: { fileName: '粘贴的文字' } }),
+      signal: ctrl.signal,
+    })
+    if (prog.aborted) return
+    prog.step('解析识别结果…', 0.95)
+    const obj = extractJson(extractContent(raw))
+    prog.close()
+    if (!obj) return showAiFail('模型返回的内容不是可解析的 JSON', extractContent(raw), 'text')
+    const result = mapAiResult(obj)
+    if (!result.courses.length) return showAiEmpty(result, raw)
+    showAiPreview(result, { mode: 'text', fileName: '粘贴的文字', raw })
+  } catch (e) {
+    prog.close()
+    if (prog.aborted || (e && e.name === 'AbortError')) return
+    showAiFail('识别没有成功', String((e && e.message) || '未知错误'), 'text')
+  }
+}
+
+function showAiFail(title, detail, mode) {
+  const mask = openMask(
+    h('div', { class: 'lib-card' }, [
+      h('div', { class: 'lib-head' }, [
+        h('b', { text: title }),
+        h('button', { class: 'mini', type: 'button', text: '关闭', onclick: () => mask.remove() }),
+      ]),
+      h('p', { class: 'lib-hint', text: String(detail || '').slice(0, 600) }),
+      h('p', {
+        class: 'lib-hint',
+        text:
+          mode === 'vision'
+            ? '如果模型不支持图片，可以：① 换用带视觉的模型；② 用电脑打开 PDF 复制文字后用「粘贴文字让 AI 识别」；③ 用「教务系统一键导入」。'
+            : '可以检查接口地址/模型名是否正确，或改用「教务系统一键导入」；识别结果不会写入课表。',
+      }),
+    ])
+  )
+}
+
+function showAiEmpty(result, raw) {
+  const detail = (result && result.warnings && result.warnings.length ? result.warnings.join('；') + '\n\n' : '') + String(extractContent(raw) || '').slice(0, 400)
+  showAiFail('没有识别到课程', detail || '模型返回了空结果', 'text')
+}
+
+/**
+ * 识别结果预览：逐条可改，改完才写入。
+ * 这是需求里「识别失败或不明确的字段要能校正/确认」的落点：
+ *   - warn 级问题（星期/节次/周次缺失或越界）在行内标黄，计数进标题；
+ *   - info 级（缺地点/教师）只做灰字提示，不拦导入；
+ *   - 仍有 warn 时导入会二次确认，用户可以「就这样导入」。
+ */
+function showAiPreview(result, opt) {
+  const drafts = result.courses.slice()
+  const termInput = h('input', { class: 'input', type: 'date', value: result.termStart || tt().termStart || '' })
+  const statEl = h('span', { class: 'ai-stat' })
+  const listEl = h('div', { class: 'ai-list' })
+
+  const rowRefs = []
+
+  function refreshStat() {
+    const s = summarize(drafts)
+    statEl.textContent = s.total + ' 条 · ' + (s.warn ? s.warn + ' 条待确认' : '全部可导入')
+    statEl.classList.toggle('warn', s.warn > 0)
+  }
+
+  function paintIssues(row) {
+    const box = row.issueEl
+    box.innerHTML = ''
+    const issues = row.draft.issues || []
+    issues.forEach((it) => {
+      box.appendChild(h('span', { class: 'ai-issue ' + (it.level || 'info'), text: it.text }))
+    })
+    row.el.classList.toggle('has-warn', issues.some((x) => x.level === 'warn'))
+  }
+
+  function touch(draft, row) {
+    const r = revalidate(draft)
+    draft.issues = r && r.issues ? r.issues : []
+    paintIssues(row)
+    refreshStat()
+  }
+
+  function buildRow(draft, i) {
+    const nameInput = h('input', {
+      class: 'input ai-name',
+      value: draft.name,
+      placeholder: '课程名称',
+      oninput: (e) => {
+        draft.name = e.target.value
+        touch(draft, row)
+      },
+    })
+    const daySel = h(
+      'select',
+      {
+        class: 'ai-sel',
+        onchange: (e) => {
+          draft.day = Number(e.target.value)
+          touch(draft, row)
+        },
+      },
+      WEEK_NAMES.slice(1).map((n, k) => h('option', { value: String(k + 1), text: n, selected: draft.day === k + 1 ? 'selected' : null }))
+    )
+    const startIn = numInput(draft.start, 1, 12, (v) => {
+      draft.start = v
+      touch(draft, row)
+    })
+    const endIn = numInput(draft.end, 1, 12, (v) => {
+      draft.end = v
+      touch(draft, row)
+    })
+    const wsIn = numInput(draft.weekStart, 1, 30, (v) => {
+      draft.weekStart = v
+      touch(draft, row)
+    })
+    const weIn = numInput(draft.weekEnd, 1, 30, (v) => {
+      draft.weekEnd = v
+      touch(draft, row)
+    })
+    const wtSel = h(
+      'select',
+      {
+        class: 'ai-sel',
+        onchange: (e) => {
+          draft.weekType = Number(e.target.value)
+          touch(draft, row)
+        },
+      },
+      [0, 1, 2].map((v) => h('option', { value: String(v), text: WEEK_TYPE_LABEL[v], selected: draft.weekType === v ? 'selected' : null }))
+    )
+    const locIn = h('input', {
+      class: 'input ai-small',
+      value: draft.location || '',
+      placeholder: '地点',
+      oninput: (e) => {
+        draft.location = e.target.value
+        touch(draft, row)
+      },
+    })
+    const tchIn = h('input', {
+      class: 'input ai-small',
+      value: draft.teacher || '',
+      placeholder: '教师',
+      oninput: (e) => {
+        draft.teacher = e.target.value
+        touch(draft, row)
+      },
+    })
+    const issueEl = h('div', { class: 'ai-issues' })
+    const idxEl = h('span', { class: 'ai-idx', text: String(i + 1) })
+    const delBtn = h('button', {
+      class: 'mini ai-del',
+      type: 'button',
+      text: '删除',
+      onclick: () => {
+        draft.deleted = true
+        row.el.style.display = 'none'
+        refreshStat()
+      },
+    })
+    const row = {
+      draft,
+      issueEl,
+      el: h('div', { class: 'ai-row' }, [
+        h('div', { class: 'ai-row-h' }, [idxEl, nameInput, delBtn]),
+        h('div', { class: 'ai-row-grid' }, [
+          h('label', {}, [h('span', { text: '星期' }), daySel]),
+          h('label', {}, [h('span', { text: '节次' }), startIn, h('i', { text: '-' }), endIn]),
+          h('label', {}, [h('span', { text: '周次' }), wsIn, h('i', { text: '-' }), weIn]),
+          h('label', {}, [h('span', { text: '单双' }), wtSel]),
+        ]),
+        h('div', { class: 'ai-row-grid' }, [h('label', {}, [h('span', { text: '地点' }), locIn]), h('label', {}, [h('span', { text: '教师' }), tchIn])]),
+        issueEl,
+      ]),
+    }
+    if (draft.deleted) row.el.style.display = 'none'
+    paintIssues(row)
+    return row
+  }
+
+  drafts.forEach((d, i) => {
+    const row = buildRow(d, i)
+    rowRefs.push(row)
+    listEl.appendChild(row.el)
+  })
+  refreshStat()
+
+  const note =
+    opt.mode === 'vision'
+      ? '识别方式：图片（这一份没有可用文本层，按页面图识别）'
+      : '识别方式：文本层'
+  const mask = openMask(
+    h('div', { class: 'lib-card ai-card' }, [
+      h('div', { class: 'lib-head' }, [
+        h('b', { text: '识别到 ' + drafts.length + ' 条课程' }),
+        h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() }),
+      ]),
+      h('div', { class: 'ai-sub' }, [h('span', { class: 'lib-hint', text: note + ' · ' + String(opt.fileName || '') }), statEl]),
+      result.warnings && result.warnings.length ? h('p', { class: 'lib-hint', text: result.warnings.join('；') }) : null,
+      h('p', { class: 'lib-hint', text: '下面每一条都能改：名称、星期、节次、周次、单双周、地点、教师。黄色是待确认项，灰色只是缺信息。' }),
+      listEl,
+      h('p', { class: 'lib-hint', text: '开学日期（那周的周一），用于计算第几周：' }),
+      termInput,
+      h('div', { class: 'act-grid' }, [
+        h('button', { class: 'btn primary', type: 'button', text: '覆盖导入', onclick: () => apply('replace') }),
+        h('button', { class: 'btn', type: 'button', text: '追加到现有', onclick: () => apply('append') }),
+      ]),
+    ])
+  )
+
+  async function apply(mode) {
+    const alive = drafts.filter((d) => !d.deleted && String(d.name || '').trim())
+    if (!alive.length) return toast('没有可导入的课程')
+    // 还有越界/缺项时提示一次，用户确认后照常导入（不强拦，符合「允许确认」）
+    const warn = alive.filter((d) => (d.issues || []).some((x) => x.level === 'warn'))
+    if (warn.length) {
+      const ok = await confirmAsync('还有 ' + warn.length + ' 条字段待确认，仍要导入吗？', '仍要导入')
+      if (!ok) return
+    }
+    const parsed = { courses: alive.map((d, i) => toCourse(d, i)), source: 'ai', warnings: [] }
+    const merged = mergeTimetable(tt(), parsed, mode, termInput.value)
+    await saveMeta('timetable', merged)
+    mask.remove()
+    render()
+    toast('已导入 ' + alive.length + ' 条课程')
+  }
+}
+
+function numInput(value, lo, hi, onChange) {
+  const el = h('input', { class: 'input ai-num', type: 'number', inputmode: 'numeric', value: String(value == null ? lo : value) })
+  el.addEventListener('change', () => {
+    let v = Math.round(Number(el.value))
+    if (!isFinite(v)) v = lo
+    v = Math.max(lo, Math.min(hi, v))
+    el.value = String(v)
+    onChange(v)
+  })
+  return el
 }
 
 // ---------------------------------------------------------------- 教务系统一键导入
