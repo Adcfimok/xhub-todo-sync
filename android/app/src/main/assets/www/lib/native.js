@@ -411,3 +411,48 @@ export function waitEduCapture() {
 
   return { promise, cancel: () => finish(new Error('已取消'), null) }
 }
+
+// ---------------------------------------------------------------- 速达 · 手机已安装应用
+
+/** 老版本 APK / 浏览器预览没有这层桥；UI 会明确提示而不是给一堆占位图标 */
+export function hasAppCatalog() {
+  return !!bridgeFn('installedApps')
+}
+
+/**
+ * 本机已安装应用（有启动入口的）。
+ * 返回 [{pkg, label, icon}]，icon 是同源 URL `/__appicon/<hash>.png`，
+ * 由原生把系统真实图标导出成 PNG 后经本地 HTTP 提供，不是 base64、也不是统一占位图。
+ */
+export function listInstalledApps() {
+  const fn = bridgeFn('installedApps')
+  if (!fn) return []
+  try {
+    const arr = JSON.parse(String(fn() || '[]'))
+    return Array.isArray(arr) ? arr.filter((a) => a && a.pkg) : []
+  } catch (e) {
+    return []
+  }
+}
+
+/** 图标缓存丢失时按包名让原生重新导出一次 */
+export function appIconFor(pkg) {
+  const fn = bridgeFn('appIconFor')
+  if (!fn) return ''
+  try {
+    return String(fn(String(pkg || '')) || '')
+  } catch (e) {
+    return ''
+  }
+}
+
+/** 拉起应用；false 通常意味着应用已卸载或没有可启动入口 */
+export function launchApp(pkg) {
+  const fn = bridgeFn('launchApp')
+  if (!fn) return false
+  try {
+    return !!fn(String(pkg || ''))
+  } catch (e) {
+    return false
+  }
+}

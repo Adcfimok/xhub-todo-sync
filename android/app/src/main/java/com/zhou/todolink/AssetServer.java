@@ -4,6 +4,7 @@ import android.content.res.AssetManager;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -54,13 +55,16 @@ final class AssetServer implements Runnable {
     private static final int[] PREFERRED_PORTS = {47830, 47831, 47832, 47833};
 
     private final AssetManager assets;
+    /** 系统应用图标的私有缓存目录；null 表示不提供 /__appicon/ */
+    private final File iconDir;
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private ServerSocket server;
     private Thread thread;
     private volatile boolean running;
 
-    AssetServer(AssetManager assets) {
+    AssetServer(AssetManager assets, File iconDir) {
         this.assets = assets;
+        this.iconDir = iconDir;
     }
 
     int start() throws IOException {
@@ -152,6 +156,18 @@ final class AssetServer implements Runnable {
             // 目录穿越防护：只允许字母数字、点、横线、下划线与斜杠
             if (!path.matches("^/[A-Za-z0-9._/-]*$") || path.contains("..")) {
                 write(socket.getOutputStream(), 400, "text/plain; charset=utf-8", "bad path".getBytes("UTF-8"));
+                return;
+            }
+
+            // 手机应用真实图标：由 AppCatalog 从系统 Drawable 导出到私有缓存，
+            // 只在回环服务里按白名单文件名提供，不走 assets、不接受任意路径。
+            if (path.startsWith("/__appicon/")) {
+                byte[] icon = iconDir == null ? null : AppCatalog.readIcon(iconDir, path.substring("/__appicon/".length()));
+                if (icon == null) {
+                    write(socket.getOutputStream(), 404, "text/plain; charset=utf-8", "no icon".getBytes("UTF-8"));
+                } else {
+                    write(socket.getOutputStream(), 200, "image/png", icon);
+                }
                 return;
             }
 

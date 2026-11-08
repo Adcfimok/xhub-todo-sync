@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.zhou.todolink"
-    android:versionCode="28"
-    android:versionName="3.4.0">
+    android:versionCode="29"
+    android:versionName="3.5.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="32" />
 
@@ -28,6 +28,12 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="http" />
+        </intent>
+        <!-- Android 11+ 包可见性：不声明这个，queryIntentActivities 只能看到自己和少数系统应用，
+             「添加应用」列表会是空的。只查 LAUNCHER 入口，不申请 QUERY_ALL_PACKAGES。 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 

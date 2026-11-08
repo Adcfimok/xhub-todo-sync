@@ -910,6 +910,70 @@ select.input { appearance: none; }
 .pend { color: var(--blue); }
 
 /* ---------- 速达 ---------- */
+/* 两个独立个体的切换：只切视图，不共享数据 */
+.res-tabs { flex: none; display: flex; gap: 8px; padding: 2px 16px 8px; }
+.res-tab {
+  flex: 1; min-width: 0;
+  padding: 8px 6px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card);
+  color: var(--ink-2); font-size: 12.5px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.res-tab.on { border-color: var(--accent); color: var(--accent); background: var(--glass-sel); font-weight: 600; }
+.res-scroll { overflow-x: hidden; }
+.res-section { padding: 2px 0 8px; }
+.res-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.res-section-head b { font-size: 14px; }
+.res-section .hint-line { margin: 6px 0 10px; }
+
+/* 手机应用：小图标网格。auto-fill + 1fr 保证自动换行且永不超出容器；
+   min-width:0 / overflow:hidden 是 WebView 上防止长名称把列撑破的兜底。 */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 10px;
+  width: 100%; max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 2px 0 4px;
+}
+.app-tile { position: relative; min-width: 0; }
+.app-btn {
+  width: 100%; max-width: 100%; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 4px 8px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--card); color: var(--ink); cursor: pointer;
+  overflow: hidden;
+}
+.app-btn:active { background: var(--glass-sel); }
+.app-icon { width: 48px; height: 48px; border-radius: 12px; object-fit: contain; flex: none; }
+.app-fallback {
+  width: 48px; height: 48px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 12px; background: var(--well); color: var(--ink-2); font-size: 15px; font-weight: 600;
+}
+.app-label {
+  width: 100%; max-width: 100%; min-width: 0;
+  font-size: 11.5px; line-height: 1.35; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.app-del {
+  position: absolute; top: 2px; right: 2px;
+  width: 20px; height: 20px; padding: 0;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg-2); color: var(--ink-3);
+  font-size: 13px; line-height: 1; cursor: pointer;
+}
+.app-del:active { background: var(--well); }
+.res-readonly { opacity: .72; cursor: default; }
+
+/* 添加应用选择器：复用学校选择器的面板样式，行改成横向图标 + 文字 */
+.app-pick-row { flex-direction: row; align-items: center; gap: 10px; }
+.app-pick-ic { width: 40px; height: 40px; flex: none; border-radius: 10px; object-fit: contain; }
+.app-pick-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.app-pick-body b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .res-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding-top: 4px; }
 .res {
   display: flex; flex-direction: column; align-items: center; gap: 6px;

@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         try {
-            server = new AssetServer(getAssets());
+            server = new AssetServer(getAssets(), AppCatalog.iconDir(this));
             server.start();
         } catch (Exception e) {
             Toast.makeText(this, "本地资源服务启动失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -843,6 +843,38 @@ public class MainActivity extends Activity {
                 WebView v = ((MainActivity) ctx).eduView;
                 if (v != null && v.canGoBack()) v.goBack();
             });
+        }
+
+        // ------------------------------------------------------------ 速达 · 手机应用（与 PC 端完全独立）
+
+        /** 返回本机已安装应用的 [{pkg,label,icon}] JSON；图标是系统真实图标缓存后的同源 URL */
+        @JavascriptInterface
+        public String installedApps() {
+            try {
+                return AppCatalog.installedAppsJson(ctx);
+            } catch (Throwable e) {
+                return "[]";
+            }
+        }
+
+        /** 兜底：图标缓存被清理时按包名重新导出一次，返回 URL */
+        @JavascriptInterface
+        public String appIconFor(String pkg) {
+            try {
+                return AppCatalog.ensureIconUrl(ctx, pkg);
+            } catch (Throwable e) {
+                return "";
+            }
+        }
+
+        /** 点图标拉起应用；返回是否成功，前端据此提示「应用可能已卸载」 */
+        @JavascriptInterface
+        public boolean launchApp(String pkg) {
+            try {
+                return AppCatalog.launch(ctx, pkg);
+            } catch (Throwable e) {
+                return false;
+            }
         }
     }
 }
