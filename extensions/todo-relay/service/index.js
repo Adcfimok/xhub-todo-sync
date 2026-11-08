@@ -849,7 +849,18 @@ const server = http.createServer(async (req, res) => {
           maxFile: files.maxFile,
           chunkSize: 2 * 1024 * 1024,
           devices: store.deviceList(),
+          saveDir: files.saveDirInfo(),
         })
+      }
+
+      if (pathname === '/api/local/files/savedir' && req.method === 'GET') {
+        return send(res, 200, files.saveDirInfo())
+      }
+
+      if (pathname === '/api/local/files/savedir' && req.method === 'POST') {
+        const b = await readBody(req)
+        const r = await files.setSaveDir(b.path)
+        return send(res, 200, Object.assign({ ok: true }, r))
       }
 
       if (pathname === '/api/local/files/send/init' && req.method === 'POST') {

@@ -32,10 +32,10 @@
   // android-apk 条目保持一致）。宿主 iframe 没有 allow-popups，target="_blank"
   // 与 window.open() 都会被静默拦截，所以跳转一律走 api.openExternal。
   var ANDROID_DL = {
-    version: '3.0.0',
-    size: 245092,
-    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.0.0/todo-link-3.0.0.apk',
-    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.0.0',
+    version: '3.1.0',
+    size: 262052,
+    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.1.0/todo-link-3.1.0.apk',
+    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.1.0',
   }
 
   // ---------------------------------------------------------------- 基础
@@ -1009,6 +1009,12 @@
     var st = d.stats || {}
     $('files-quota').textContent = fmtSize(st.used) + ' / ' + fmtSize(st.quota) + ' · 单文件上限 ' + fmtSize(d.maxFile || MAX_FILE)
 
+    if (d.saveDir) {
+      $('savedir-path').textContent = d.saveDir.isDefault ? '默认收件箱' : d.saveDir.path
+      $('savedir-path').title = d.saveDir.path || ''
+      $('btn-savedir-default').hidden = !!d.saveDir.isDefault
+    }
+
     var out = $('file-out')
     out.innerHTML = ''
     var outs = d.out || []
@@ -1298,11 +1304,64 @@
     })
     $('btn-files-clear-in').addEventListener('click', function () { clearFiles('in') })
     $('btn-files-clear-out').addEventListener('click', function () { clearFiles('out') })
+    $('btn-savedir').addEventListener('click', function () { openSaveDir() })
+    $('btn-savedir-default').addEventListener('click', function () { setSaveDir('') })
     refreshFiles()
     setInterval(function () {
       if (Date.now() - FILES.at < 12000) return
       refreshFiles()
     }, 6000)
+  }
+
+  /** 保存位置弹窗：输入目录路径，或恢复默认收件箱 */
+  function openSaveDir() {
+    var cur = FILES.data && FILES.data.saveDir && !FILES.data.saveDir.isDefault ? FILES.data.saveDir.path : ''
+    var mask = document.createElement('div')
+    mask.className = 'savedir-mask'
+    var box = document.createElement('div')
+    box.className = 'savedir-card'
+    var head = document.createElement('div')
+    head.className = 'savedir-head'
+    var title = document.createElement('b')
+    title.textContent = '文件保存位置'
+    var close = document.createElement('button')
+    close.className = 'link'
+    close.type = 'button'
+    close.textContent = '取消'
+    close.addEventListener('click', function () { mask.remove() })
+    head.appendChild(title)
+    head.appendChild(close)
+    var hint = document.createElement('p')
+    hint.className = 'savedir-hint'
+    hint.textContent = '手机发来的文件会保存到这个目录；留空则用默认收件箱。'
+    var input = document.createElement('input')
+    input.className = 'savedir-input'
+    input.value = cur
+    input.placeholder = '例如：D:\\Downloads\\手机文件'
+    var btn = document.createElement('button')
+    btn.className = 'btn primary savedir-save'
+    btn.type = 'button'
+    btn.textContent = '保存'
+    btn.addEventListener('click', function () { setSaveDir(input.value.trim()) })
+    box.appendChild(head)
+    box.appendChild(hint)
+    box.appendChild(input)
+    box.appendChild(btn)
+    mask.appendChild(box)
+    document.body.appendChild(mask)
+    mask.addEventListener('click', function (e) { if (e.target === mask) mask.remove() })
+    setTimeout(function () { input.focus() }, 60)
+  }
+
+  function setSaveDir(path) {
+    fileApi('/api/local/files/savedir', { method: 'POST', json: true, body: JSON.stringify({ path: path }) })
+      .then(function (r) {
+        var box = document.querySelector('.savedir-mask')
+        if (box) box.remove()
+        flash(path ? '已设置保存位置：' + r.path : '已恢复默认收件箱')
+        return refreshFiles()
+      })
+      .catch(handleErr)
   }
 
   // ---------------------------------------------------------------- 实时推送

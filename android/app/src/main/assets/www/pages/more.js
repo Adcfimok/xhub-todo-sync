@@ -12,6 +12,7 @@ import {
 import { h, toast, confirmAsync } from '../lib/ui.js'
 import { writeClipboard } from '../lib/native.js'
 import { holidaysInRange } from '../lib/holidays.js'
+import { normalizeNickname } from '../lib/nickname.js'
 
 export const meta = { title: '我的', route: 'more' }
 
@@ -21,8 +22,12 @@ let busy = false
 const BULK_KEY = 'holidayBulk'
 
 const ITEMS = [
+  // 称呼：首次启动强制设置一次，这里可随时改；应用到首页问候、AI 对话、每日一句
+  { title: '称呼', desc: '首页问候与 AI 怎么称呼你', col: null, icon: '✎', nickname: true },
   // 笔记已从底栏移出，「我的」是它的主入口（另外两处在首页：最近笔记、统计格）
   { route: 'notes', title: '笔记', desc: '长文本，正文同步到电脑', col: 'notes', icon: '▦' },
+  { route: 'timetable', title: '课表', desc: '课程安排 · 单双周 · 导入导出', col: null, icon: '▥' },
+  { route: 'countdown', title: '倒数日', desc: '重要日子倒计时 · 首页卡片可滑动', col: null, icon: '◷' },
   { route: 'stickies', title: '便签', desc: '电脑上的两块便签', col: 'stickies', icon: '▤' },
   { route: 'resources', title: '速达', desc: '网页与常用入口', col: 'resources', icon: '◎' },
   { route: 'snippets', title: '提示词', desc: '常用话术一键复制', col: 'snippets', icon: '⌘' },
@@ -37,6 +42,42 @@ export function mount(root) {
   rootEl = root
   render()
   return () => {}
+}
+
+// ---------------------------------------------------------------- 称呼
+
+/** 我的 → 称呼：可随时修改（首次启动的强制弹窗在 app.js 里） */
+function openNickname() {
+  const cur = S.meta.nickname || ''
+  const mask = h('div', { class: 'lib-mask' })
+  const input = h('input', { class: 'input', value: cur, placeholder: '例如：小明', maxlength: '16' })
+  const box = h('div', { class: 'lib-card' }, [
+    h('div', { class: 'lib-head' }, [h('b', { text: '希望我怎么称呼你' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
+    h('p', { class: 'lib-hint', text: '会用在首页问候、AI 对话和每日一句里。' }),
+    input,
+    h('button', {
+      class: 'btn primary block',
+      type: 'button',
+      text: '保存',
+      onclick: async () => {
+        const v = normalizeNickname(input.value)
+        if (!v) {
+          toast('称呼不能为空')
+          return
+        }
+        await saveMeta('nickname', v)
+        mask.remove()
+        render()
+        toast('已更新称呼：' + v)
+      },
+    }),
+  ])
+  mask.appendChild(box)
+  document.body.appendChild(mask)
+  mask.addEventListener('click', (e) => {
+    if (e.target === mask) mask.remove()
+  })
+  setTimeout(() => input.focus(), 80)
 }
 
 // ---------------------------------------------------------------- 节日批量添加
@@ -209,12 +250,13 @@ function render() {
   ITEMS.forEach((it) => {
     const n = it.col ? colRecords(it.col).length : 0
     const subRow = it.route === 'holidays'
+    const desc = it.nickname ? (S.meta.nickname ? '当前：' + S.meta.nickname : '尚未设置') : it.desc
     list.appendChild(
-      h('button', { class: 'menu-item' + (subRow ? ' no-sep' : ''), type: 'button', onclick: () => (location.hash = '#/' + it.route) }, [
+      h('button', { class: 'menu-item' + (subRow ? ' no-sep' : ''), type: 'button', onclick: () => (it.nickname ? openNickname() : (location.hash = '#/' + it.route)) }, [
         h('span', { class: 'mi-ic', text: it.icon }),
         h('span', { class: 'mi-body' }, [
           h('span', { class: 'mi-t', text: it.title }),
-          h('span', { class: 'mi-d', text: it.desc }),
+          h('span', { class: 'mi-d', text: desc }),
         ]),
         it.col ? h('span', { class: 'mi-n', text: String(n) }) : null,
         h('span', { class: 'mi-go', text: '›' }),

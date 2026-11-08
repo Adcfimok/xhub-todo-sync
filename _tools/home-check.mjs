@@ -85,6 +85,20 @@ async function readLayout(page) {
   )
 }
 
+/** 首次启动会弹强制称呼弹窗：填一个测试称呼并提交，避免挡住后续断言 */
+async function dismissNickname(page, vname) {
+  try {
+    await page.waitForSelector('.nick-gate', { timeout: 4000 })
+    check(`${vname} 首次启动弹称呼弹窗`, true)
+    await page.fill('.nick-input', '测试员')
+    await page.click('.nick-save')
+    await page.waitForTimeout(400)
+    check(`${vname} 提交称呼后弹窗消失`, (await page.$('.nick-gate')) === null)
+  } catch (e) {
+    check(`${vname} 首次启动弹称呼弹窗`, false, '未出现弹窗')
+  }
+}
+
 const VIEWPORTS = [
   { name: 'small-360', width: 360, height: 740 },
   { name: 'iphone-390', width: 390, height: 844 },
@@ -113,7 +127,7 @@ for (const v of VIEWPORTS) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.0.0',
+      appVersion: () => '3.1.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -126,6 +140,9 @@ for (const v of VIEWPORTS) {
   await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(900)
 
+  // 首次启动会弹「希望我怎么称呼你」强制弹窗：填一个测试称呼并提交，顺便验证弹窗能走通
+  await dismissNickname(page, v.name)
+
   // ---------- 1. 秒级时钟 ----------
   const t1 = await page.textContent('#home-clock')
   check(`${v.name} 时钟格式 HH:MM:SS`, /^\d{2}:\d{2}:\d{2}$/.test((t1 || '').trim()), t1)
@@ -135,10 +152,10 @@ for (const v of VIEWPORTS) {
 
   // ---------- 2. 卡片渲染 ----------
   const cards = await page.$$eval('.home-grid .hc', (els) => els.map((e) => e.getAttribute('data-card')))
-  check(`${v.name} 默认 7 张卡片`, cards.length === 7, cards.join(','))
+  check(`${v.name} 默认 9 张卡片`, cards.length === 9, cards.join(','))
   check(
-    `${v.name} 含名言/统计/日历/节日`,
-    ['quote', 'stats', 'calendar', 'holidays'].every((id) => cards.includes(id)),
+    `${v.name} 含名言/统计/课表/倒数日/日历/节日`,
+    ['quote', 'stats', 'timetable', 'countdown', 'calendar', 'holidays'].every((id) => cards.includes(id)),
     cards.join(',')
   )
 
@@ -284,7 +301,7 @@ for (const v of VIEWPORTS) {
 
   const moved = await readLayout(page)
   const item = moved && moved.items.filter((i) => i.id === dragCard)[0]
-  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 9, JSON.stringify(item))
+  check(`${v.name} 拖动后位置已落盘`, !!item && item.y === 13, JSON.stringify(item))
 
   // ---------- 4. 缩放 ----------
   // 笔记卡 2 宽、最小 2：向右拖一格加到 3 宽（位置可能被顺延，宽度必须变）
@@ -311,7 +328,7 @@ for (const v of VIEWPORTS) {
   await page.waitForTimeout(300)
   const libRows = await page.$$eval('.lib-row', (els) => els.length)
   const libTags = await page.$$eval('.lib-tag', (els) => els.map((e) => e.textContent))
-  check(`${v.name} 卡片库列出全部卡片`, libRows === 10, String(libRows))
+  check(`${v.name} 卡片库列出全部卡片`, libRows === 12, String(libRows))
   check(`${v.name} 扩展五个集合标注来源`, libTags.length === 5, libTags.join(','))
 
   if (shots) {
@@ -324,7 +341,7 @@ for (const v of VIEWPORTS) {
   await page.click('.hc[data-card="quote"] .hc-del')
   await page.waitForTimeout(350)
   const afterRemove = await page.$$eval('.home-grid .hc', (els) => els.length)
-  check(`${v.name} 移除卡片生效`, afterRemove === 6, String(afterRemove))
+  check(`${v.name} 移除卡片生效`, afterRemove === 8, String(afterRemove))
   await page.click('.editbar .btn:nth-of-type(1)')
   await page.waitForTimeout(300)
   const addBtn = await page.$('.lib-row:last-child .btn')
@@ -422,7 +439,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.0.0',
+      appVersion: () => '3.1.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -433,6 +450,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   })
   await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(800)
+  await dismissNickname(page, '我的页')
   await page.evaluate(() => (location.hash = '#/more'))
   await page.waitForTimeout(500)
 
@@ -487,7 +505,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.0.0',
+      appVersion: () => '3.1.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -498,6 +516,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   })
   await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(700)
+  await dismissNickname(page, '老布局升级')
 
   await page.evaluate(
     () =>
@@ -568,7 +587,7 @@ async function waitBulk(page, pred, timeout = 20000) {
     window.__vibrated = 0
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.0.0',
+      appVersion: () => '3.1.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -581,6 +600,7 @@ async function waitBulk(page, pred, timeout = 20000) {
   })
   await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(900)
+  await dismissNickname(page, '强提醒')
 
   await page.evaluate(() => {
     return new Promise((resolve, reject) => {

@@ -80,6 +80,12 @@
           <span class="drop-hint">拖进来也可以 · 单文件 ≤ 512MB · 分块断点 · 局域网内 AES-256-GCM</span>
         </div>
         <div class="up-list" id="file-progress"></div>
+        <div class="savedir" id="savedir-box">
+          <span class="savedir-label">保存到</span>
+          <span class="savedir-path" id="savedir-path" title="">默认收件箱</span>
+          <button class="link" id="btn-savedir" type="button">更改</button>
+          <button class="link" id="btn-savedir-default" type="button" hidden>恢复默认</button>
+        </div>
         <div class="file-cols">
           <div class="file-col">
             <h3>待接收<span class="count" id="out-count">0</span></h3>

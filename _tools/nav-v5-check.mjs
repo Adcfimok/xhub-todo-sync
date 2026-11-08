@@ -82,7 +82,7 @@ try {
       window.Android = {
         originPort: () => 47830,
         originChanged: () => false,
-        appVersion: () => '3.0.0',
+        appVersion: () => '3.1.0',
         deviceName: () => 'Nav Probe',
         readClipboard: () => '',
         writeClipboard: () => {},
@@ -93,6 +93,15 @@ try {
     });
     await page.goto(base, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(800);
+    // 首次启动强制称呼弹窗：填一个测试称呼，避免挡住后续点击
+    try {
+      await page.waitForSelector('.nick-gate', { timeout: 4000 });
+      await page.fill('.nick-input', '测试员');
+      await page.click('.nick-save');
+      await page.waitForTimeout(400);
+    } catch (e) {
+      /* 已设置过称呼则没有弹窗 */
+    }
 
     // ---------- 1. 结构：4 个 tab + 1 个加号 ----------
     const struct = await page.evaluate(() => ({
@@ -167,6 +176,7 @@ try {
       const s1 = scaleNow();
 
       bar.classList.add('switching');
+      const animName = getComputedStyle(inner).animationName;
       await new Promise((r) => setTimeout(r, 260));
       const sSwitch = scaleNow();
       bar.classList.remove('switching');
@@ -176,7 +186,7 @@ try {
 
       // 光效已按要求移除：伪元素不应有任何内容 / 渐变 / 模糊
       return {
-        s0, s05, s1, sSwitch,
+        s0, s05, s1, sSwitch, animName,
         glowContent: glow.content,
         hasConic: glow.backgroundImage.includes('conic-gradient'),
         glowFilter: glow.filter,
@@ -185,7 +195,7 @@ try {
     check(`${v.name} 静止不放大`, Math.abs(fx.s0 - 1) < 0.02, `scale=${fx.s0.toFixed(3)}`);
     check(`${v.name} 拖动 50% 放大`, fx.s05 > 1.05 && fx.s05 < 1.10, `scale=${fx.s05.toFixed(3)}（期望 1.075）`);
     check(`${v.name} 拖满放大 15%`, Math.abs(fx.s1 - 1.15) < 0.02, `scale=${fx.s1.toFixed(3)}`);
-    check(`${v.name} 切页脉冲放大到 1.14`, Math.abs(fx.sSwitch - 1.14) < 0.02, `scale=${fx.sSwitch.toFixed(3)}`);
+    check(`${v.name} 切页触发果冻脉冲动画`, fx.animName && fx.animName.indexOf('indicator-pop') >= 0, `animation=${fx.animName}`);
     check(`${v.name} 无彩色渐变层`, !fx.hasConic, fx.hasConic ? '仍有 conic-gradient' : '已移除');
     check(`${v.name} 无模糊光晕`, !fx.glowFilter || fx.glowFilter === 'none', `filter=${fx.glowFilter}`);
 

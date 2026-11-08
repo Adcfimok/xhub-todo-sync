@@ -635,3 +635,15 @@ body {
 @media (max-width: 900px) {
   .file-cols { grid-template-columns: 1fr; }
 }
+
+
+/* ---------- 文件保存位置 ---------- */
+.savedir { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11.5px; color: var(--ink-3); }
+.savedir-label { flex: none; }
+.savedir-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.savedir-mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.savedir-card { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.savedir-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.savedir-hint { margin: 0 0 10px; font-size: 12px; color: var(--ink-3); }
+.savedir-input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--well); color: var(--ink); font-size: 13px; margin-bottom: 12px; box-sizing: border-box; }
+.savedir-save { width: 100%; }

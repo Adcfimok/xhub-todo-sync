@@ -53,24 +53,28 @@ test('统计卡与每日一句同为 4×1', () => {
   SPLIT_IDS.forEach((id) => assert.equal(cardDef(id), null, `${id} 不应再出现在目录里`))
 })
 
-test('默认布局：统计紧跟名言、同为 1 行，日历接在下面', () => {
+test('默认布局：统计紧跟名言，今日课表、倒数日、日历依次排下', () => {
   const layout = defaultLayout()
   const quote = layout.items.find((i) => i.id === 'quote')
   const stats = layout.items.find((i) => i.id === 'stats')
   assert.deepEqual({ x: stats.x, y: stats.y, w: stats.w, h: stats.h }, { x: 0, y: 1, w: 4, h: 1 })
   assert.equal(quote.y + quote.h, stats.y, '统计紧贴名言下一行')
+  const tt = layout.items.find((i) => i.id === 'timetable')
+  assert.equal(tt.y, 2, '今日课表接在统计下面')
+  const cd = layout.items.find((i) => i.id === 'countdown')
+  assert.equal(cd.y, 4, '倒数日接在课表下面')
   const cal = layout.items.find((i) => i.id === 'calendar')
-  assert.equal(cal.y, 2)
+  assert.equal(cal.y, 6, '日历接在倒数日下面')
   assert.equal(layout.v, 3)
   noOverlap(layout.items)
   inGrid(layout.items)
 })
 
-test('卡片目录共 10 项，卡片库与 2.11.1 一致', () => {
-  assert.equal(CARD_DEFS.length, 10)
+test('卡片目录共 12 项，含今日课表与倒数日', () => {
+  assert.equal(CARD_DEFS.length, 12)
   assert.deepEqual(
     CARD_DEFS.map((d) => d.id),
-    ['quote', 'stats', 'calendar', 'today', 'todos', 'notes', 'stickies', 'resources', 'snippets', 'holidays']
+    ['quote', 'stats', 'calendar', 'today', 'todos', 'notes', 'stickies', 'resources', 'snippets', 'holidays', 'timetable', 'countdown']
   )
 })
 

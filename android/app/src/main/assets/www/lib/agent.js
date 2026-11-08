@@ -2,7 +2,7 @@
    工具定义与行为对齐 x-hub 桌面端 src-tauri/src/agent/builtin.rs（list/create/update/delete_todo），
    只是把"本机数据库"换成手机里的待办集合。 */
 
-import { colRecords, newRecord, touch, softDelete } from './core.js'
+import { S, colRecords, newRecord, touch, softDelete } from './core.js'
 import { streamHttp } from './native.js'
 import { fmtDue, startOfDay } from './ui.js'
 
@@ -80,8 +80,11 @@ export function buildSystemPrompt() {
   const now = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') +
     ' 星期' + '日一二三四五六'[d.getDay()] + ' ' + hh + ':' + mm
 
+  const nick = S.meta.nickname ? String(S.meta.nickname).trim() : ''
+
   return (
     '你是 x-hub 手机端的内置助手，可以直接操作这台手机上的待办：查看、创建、修改、删除。\n' +
+    (nick ? '用户的名字是「' + nick + '」，称呼用户时用这个名字。\n' : '') +
     '现在是 ' + now + '。\n\n' +
     '行为准则：\n' +
     '1. 先判断要不要查，再决定查什么。判断标准是「用户这句话的答案是否依赖待办数据」：\n' +

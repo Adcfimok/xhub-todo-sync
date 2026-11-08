@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="待办同步">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d6dff"/>
+      <stop offset="1" stop-color="#4a4ad8"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- 左侧待办清单 -->
+  <g fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round">
+    <path d="M15 21.5h13"/>
+    <path d="M15 32h13"/>
+    <path d="M15 42.5h9"/>
+    <path d="M31.5 21.5h4"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="35" cy="21.5" r="2.4"/>
+    <circle cx="35" cy="32" r="2.4"/>
+  </g>
+  <!-- 右侧同步箭头 -->
+  <g fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M41 33.5a8.5 8.5 0 0 1 8.5-8.5"/>
+    <path d="M46.4 21.6l3.6 3.4-3.6 3.4"/>
+    <path d="M53 41.5a8.5 8.5 0 0 1-8.5 8.5"/>
+    <path d="M47.6 53.4 44 50l3.6-3.4"/>
+  </g>
+</svg>

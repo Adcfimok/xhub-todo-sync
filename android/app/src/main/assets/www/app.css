@@ -404,12 +404,16 @@ input, textarea { user-select: text; }
 .tabbar.dragging .tab-indicator > i {
   border-radius: 46%;
 }
-/* 点按切页：先鼓一下再回弹（.switching 由路由层加/删），同样不带光效 */
+/* 点按切页：先鼓一下再回弹（.switching 由路由层加/删），同样不带光效。
+   果冻回弹：overshoot 一下再落定，比单纯的 scale(1.14) 更有「弹性」 */
+@keyframes indicator-pop {
+  0% { transform: scale(1); border-radius: 999px; }
+  38% { transform: scale(1.18); border-radius: 42%; }
+  72% { transform: scale(.96); }
+  100% { transform: scale(1); border-radius: 999px; }
+}
 .tabbar.switching .tab-indicator > i {
-  /* 鼓起比回落快：0.14s 弹起，移除类后按基线的 0.24s 慢慢收回去 */
-  transition: transform .14s cubic-bezier(.3, .9, .3, 1), border-radius .14s ease;
-  transform: scale(1.14);
-  border-radius: 44%;
+  animation: indicator-pop .42s cubic-bezier(.22, .9, .28, 1);
 }
 /* 拖拽时关掉缓动，手指与高亮块严格同帧 */
 .tabbar.dragging .tab-indicator { transition: none; }
@@ -437,7 +441,15 @@ input, textarea { user-select: text; }
 }
 .tab.on { color: var(--accent); font-weight: 600; }
 .tab svg { display: block; width: 23px; height: 23px; transition: transform .3s cubic-bezier(.22, .9, .28, 1); }
-.tab.on svg { transform: translateY(-1px) scale(1.04); }
+.tab.on svg { transform: translateY(-1px) scale(1.12); }
+/* 酷安式图标果冻弹跳：点击时图标放大回弹，落定后回落到选中态 */
+@keyframes tab-bounce {
+  0% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-2px) scale(1.22); }
+  70% { transform: translateY(-1px) scale(.94); }
+  100% { transform: translateY(0) scale(1); }
+}
+.tab.bounce svg { animation: tab-bounce .42s cubic-bezier(.22, .9, .28, 1); }
 
 /* 中央新建：酷安式圆角方块，比两侧略矮胖，自带光晕 */
 .tab-add {
@@ -784,6 +796,21 @@ select.input { appearance: none; }
 .modal-text { margin: 0 0 16px; font-size: 14.5px; line-height: 1.5; }
 .modal-btns { display: flex; gap: 10px; }
 .modal-btns .btn { flex: 1; }
+
+/* ---------- 首次称呼弹窗（强制，不可关闭） ---------- */
+.nick-gate {
+  position: fixed; inset: 0; background: rgba(0,0,0,.62); z-index: 60;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.nick-card {
+  width: 100%; max-width: 340px;
+  background: var(--card-solid); border-radius: 18px; padding: 22px 20px;
+  box-shadow: 0 24px 70px rgba(0,0,0,.5);
+}
+.nick-title { font-size: 18px; font-weight: 700; }
+.nick-sub { margin: 8px 0 16px; font-size: 12.5px; line-height: 1.5; color: var(--ink-3); }
+.nick-input { width: 100%; margin-bottom: 14px; }
+.nick-save { width: 100%; }
 
 /* ---------- 首页 ---------- */
 .hero { padding: 6px 4px 14px; }
@@ -1792,3 +1819,51 @@ select.input { appearance: none; }
 .xfer-bar { height: 5px; margin: 9px 0 2px 40px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
 .xfer-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .18s ease; }
 .xfer-bar.done i { background: var(--green); }
+
+
+/* ---------- 课表 ---------- */
+.week-nav { padding: 12px 14px; }
+.week-nav-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.week-nav-mid { flex: 1; text-align: center; min-width: 0; }
+.week-nav-mid b { display: block; font-size: 16px; }
+.week-nav-mid span { font-size: 12px; color: var(--ink-3); }
+.week-nav-sub { display: flex; gap: 8px; margin-top: 10px; }
+.week-nav-sub .mini { flex: 1; }
+
+.course { display: flex; align-items: stretch; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.course:last-child { border-bottom: none; }
+.course-bar { flex: none; width: 4px; border-radius: 2px; background: var(--c, var(--accent)); }
+.course-main { flex: 1; min-width: 0; }
+.course-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.course-sub { margin-top: 2px; font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.course-btns { flex: none; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+
+.act-grid { display: flex; gap: 8px; }
+.act-grid .btn { flex: 1; }
+
+.imp-opts { display: flex; flex-direction: column; gap: 8px; }
+.imp-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); text-align: left; }
+.imp-opt b { font-size: 13.5px; }
+.imp-opt span { font-size: 11.5px; color: var(--ink-3); }
+
+
+/* ---------- 倒数日 ---------- */
+.cd-card { padding: 6px 2px; cursor: default; -webkit-user-select: none; user-select: none; }
+.cd-big { display: flex; align-items: baseline; gap: 8px; }
+.cd-big-n {
+  font-size: 40px; font-weight: 700; line-height: 1;
+  letter-spacing: -1px; font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.cd-big-u { font-size: 14px; color: var(--ink-3); }
+.cd-big-t { margin-top: 6px; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-big-s { margin-top: 2px; font-size: 12px; color: var(--ink-3); }
+.cd-dots { margin-top: 6px; font-size: 11px; color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums; }
+
+.cd-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.cd-row:last-child { border-bottom: none; }
+.cd-num { flex: none; min-width: 52px; text-align: center; }
+.cd-num b { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cd-num span { font-size: 11px; color: var(--ink-3); margin-left: 2px; }
+.cd-main { flex: 1; min-width: 0; }
+.cd-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-sub { margin-top: 2px; font-size: 11.5px; color: var(--ink-3); }

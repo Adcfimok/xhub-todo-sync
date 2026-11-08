@@ -167,6 +167,8 @@ class FileHub {
     this.outbox = path.join(this.root, 'out')
     this.tmp = path.join(this.root, 'tmp')
     this.indexFile = path.join(this.root, 'index.json')
+    this.saveDirFile = path.join(this.root, 'save-dir.txt')
+    this.saveDir = null // null = 用默认收件箱
     this.maxFile = o.maxFile || MAX_FILE
     this.quota = o.quota || QUOTA_BYTES
     this.onEvent = o.onEvent || function () {}
@@ -178,6 +180,16 @@ class FileHub {
 
   async init() {
     for (const d of [this.inbox, this.outbox, this.tmp]) await fsp.mkdir(d, { recursive: true })
+    // 读自定义保存目录（手机发来的文件落在这里，而不是默认收件箱）
+    try {
+      const p = String(await fsp.readFile(this.saveDirFile, 'utf8')).trim()
+      if (p) {
+        this.saveDir = path.resolve(p)
+        await fsp.mkdir(this.saveDir, { recursive: true })
+      }
+    } catch (e) {
+      this.saveDir = null
+    }
     try {
       const raw = JSON.parse(await fsp.readFile(this.indexFile, 'utf8'))
       for (const it of raw.items || []) if (it && ID_RE.test(it.id)) this.items.set(it.id, it)
@@ -202,7 +214,33 @@ class FileHub {
   }
 
   filePath(it) {
-    return path.join(it.dir === 'out' ? this.outbox : this.inbox, it.id + '__' + it.file)
+    if (it.dir === 'out') return path.join(this.outbox, it.id + '__' + it.file)
+    // 手机发来的文件：优先落到用户自定义目录，否则默认收件箱
+    const dir = this.saveDir || this.inbox
+    return path.join(dir, it.id + '__' + it.file)
+  }
+
+  /** 当前保存目录（含是否默认） */
+  saveDirInfo() {
+    return { path: this.saveDir || this.inbox, isDefault: !this.saveDir }
+  }
+
+  /** 设置自定义保存目录；传空则恢复默认收件箱 */
+  async setSaveDir(p) {
+    const dir = p ? path.resolve(String(p).trim()) : ''
+    if (dir) {
+      await fsp.mkdir(dir, { recursive: true })
+      await fsp.writeFile(this.saveDirFile, dir)
+      this.saveDir = dir
+    } else {
+      this.saveDir = null
+      try {
+        await fsp.unlink(this.saveDirFile)
+      } catch (e) {
+        /* 本来就没有配置文件 */
+      }
+    }
+    return this.saveDirInfo()
   }
 
   withLock(id, fn) {

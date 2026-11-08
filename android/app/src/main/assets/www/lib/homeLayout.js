@@ -24,6 +24,8 @@ export const CARD_DEFS = [
   { id: 'resources', title: '速达', desc: '来自扩展的 resources 集合', minW: 2, minH: 1, defW: 2, defH: 2, route: 'resources' },
   { id: 'snippets', title: '提示词', desc: '来自扩展的 snippets 集合', minW: 2, minH: 1, defW: 2, defH: 2, route: 'snippets' },
   { id: 'holidays', title: '近期节日', desc: '节日与节气，一键加待办', minW: 2, minH: 2, defW: 2, defH: 2, route: 'holidays' },
+  { id: 'timetable', title: '今日课表', desc: '今天的课程安排', minW: 2, minH: 2, defW: 4, defH: 2, route: 'timetable' },
+  { id: 'countdown', title: '倒数日', desc: '重要日子倒计时 · 左右滑动切换', minW: 2, minH: 2, defW: 4, defH: 2, route: 'countdown' },
 ]
 
 const BY_ID = {}
@@ -43,12 +45,14 @@ export function defaultLayout() {
   place('quote', 0, 0, 4, 1)
   // 统计紧跟名言，同为 4×1：两张卡在首页上沿对齐、宽高一致
   place('stats', 0, 1, 4, 1)
-  place('calendar', 0, 2, 4, 3)
-  place('today', 0, 5, 2, 2)
-  place('holidays', 2, 5, 2, 2)
-  place('notes', 0, 7, 2, 2)
-  place('resources', 2, 7, 2, 2)
-  return { v: LAYOUT_V, items, rows: 9 }
+  place('timetable', 0, 2, 4, 2)
+  place('countdown', 0, 4, 4, 2)
+  place('calendar', 0, 6, 4, 3)
+  place('today', 0, 9, 2, 2)
+  place('holidays', 2, 9, 2, 2)
+  place('notes', 0, 11, 2, 2)
+  place('resources', 2, 11, 2, 2)
+  return { v: LAYOUT_V, items, rows: 13 }
 }
 
 /** 2.12.0 短暂把统计拆成四张 4×1 卡片，2.12.1 起回退成一张「统计」卡 */

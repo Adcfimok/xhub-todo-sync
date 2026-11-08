@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.zhou.todolink"
-    android:versionCode="24"
-    android:versionName="3.0.0">
+    android:versionCode="25"
+    android:versionName="3.1.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="32" />
 
@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 精确闹钟：到点强提醒；未授权时自动退化为省电模式允许的近似闹钟 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 后台保活前台服务：提高进程优先级，保证后台能收到提醒与同步 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -53,5 +55,22 @@
         <receiver
             android:name=".AlarmReceiver"
             android:exported="false" />
+
+        <!-- 后台保活前台服务 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false" />
+
+        <!-- 桌面小组件：待办摘要 + 今日课表 -->
+        <receiver
+            android:name=".WidgetProvider"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
     </application>
 </manifest>

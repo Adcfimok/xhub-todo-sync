@@ -4,6 +4,7 @@ import { aggregate, monthMatrix, cellNode, dayKey, WEEK_HEAD } from '../lib/cal.
 import { focus as focusCalendar } from './calendar.js'
 import { openExternal } from '../lib/platform.js'
 import { dailyQuote, nextQuote, todaySeed, LOCAL_QUOTES } from '../lib/quotes.js'
+import { applyNickname, greetWithNickname } from '../lib/nickname.js'
 import {
   GRID_COLS,
   CARD_DEFS,
@@ -17,6 +18,8 @@ import {
   EXT_COLLECTIONS,
 } from '../lib/homeLayout.js'
 import { holidaysInRange, daysFromToday, fmtYmd } from '../lib/holidays.js'
+import { weekOfTerm, coursesOnDay, slotLabel } from '../lib/timetable.js'
+import { normalizeCountdowns, countdownLabel, dayAbs } from '../lib/countdown.js'
 
 export const meta = { title: '首页', route: 'home' }
 
@@ -26,6 +29,8 @@ let clockTimer = null
 let editing = false
 let layout = null
 let drag = null
+/** 倒数日卡片当前显示第几条（左右滑动切换时记住） */
+let countdownIdx = 0
 
 export function mount(root) {
   rootEl = root
@@ -364,6 +369,10 @@ function renderCard(id) {
       return cardSnippets()
     case 'holidays':
       return cardHolidays()
+    case 'timetable':
+      return cardTimetable()
+    case 'countdown':
+      return cardCountdown()
     default:
       return h('p', { class: 'muted', text: '未知卡片' })
   }
@@ -371,6 +380,7 @@ function renderCard(id) {
 
 function cardQuote() {
   const q = currentQuote()
+  const content = applyNickname(q.content, S.meta.nickname)
   return h('div', { class: 'hc-quote-wrap' }, [
     h('button', {
       class: 'hc-quote',
@@ -385,7 +395,7 @@ function cardQuote() {
         await saveMeta('quotePick', { day: todaySeed(), content: nx.content })
         render()
       },
-    }, [h('span', { class: 'hq-mark', text: '“' }), h('span', { class: 'hq-text', text: q.content })]),
+    }, [h('span', { class: 'hq-mark', text: '“' }), h('span', { class: 'hq-text', text: content })]),
     h('div', { class: 'hc-quote-foot' }, [
       h('span', { class: 'hc-quote-from', text: '—— ' + q.from }),
       h('button', { class: 'mini hq-edit', type: 'button', text: '自定义', onclick: () => editQuote() }),
@@ -580,6 +590,98 @@ function countdown(ms) {
   return d + ' 天后'
 }
 
+/** 今日课表卡片：只展示当天课程，没有课就提示去课表页 */
+function cardTimetable() {
+  const raw = S.meta.timetable
+  const tt = raw && Array.isArray(raw.courses) ? raw : { termStart: '', courses: [] }
+  const weekNum = weekOfTerm(tt.termStart)
+  const day = new Date().getDay() || 7
+  const list = coursesOnDay(tt.courses, day, weekNum)
+  if (!list.length) {
+    return h('div', null, [
+      h('p', { class: 'muted', text: '今天没有课程安排' }),
+      h('button', { class: 'mini block-more', type: 'button', text: '去课表', onclick: () => go('timetable') }),
+    ])
+  }
+  return h('div', null, [
+    ...list.map((c) =>
+      h('div', { class: 'mini-row', onclick: () => go('timetable') }, [
+        h('span', { class: 'mini-t', text: c.name }),
+        h('span', { class: 'mini-m', text: slotLabel(c) + (c.location ? ' · ' + c.location : '') }),
+      ])
+    ),
+    h('button', { class: 'mini block-more', type: 'button', text: '全部课表', onclick: () => go('timetable') }),
+  ])
+}
+
+/** 倒数日卡片：展示当前选中的倒数日，左右滑动切换下一条（局部更新，不重建整页） */
+function cardCountdown() {
+  const items = normalizeCountdowns(S.meta.countdowns)
+  if (!items.length) {
+    return h('div', null, [
+      h('p', { class: 'muted', text: '还没有倒数日' }),
+      h('button', { class: 'mini block-more', type: 'button', text: '去添加', onclick: () => go('countdown') }),
+    ])
+  }
+  countdownIdx = Math.min(countdownIdx, items.length - 1)
+
+  const numEl = h('div', { class: 'cd-big-n' })
+  const unitEl = h('div', { class: 'cd-big-u' })
+  const titleEl = h('div', { class: 'cd-big-t' })
+  const subEl = h('div', { class: 'cd-big-s' })
+  const dotsEl = items.length > 1 ? h('div', { class: 'cd-dots' }) : null
+
+  const box = h('div', { class: 'cd-card' }, [
+    h('div', { class: 'cd-big' }, [numEl, unitEl]),
+    titleEl,
+    subEl,
+    dotsEl,
+  ])
+
+  function paint() {
+    const c = items[countdownIdx]
+    const label = countdownLabel(c)
+    numEl.textContent = String(dayAbs(c))
+    unitEl.textContent = label.indexOf('已过') === 0 ? '已过' : '天'
+    titleEl.textContent = c.title
+    subEl.textContent = label + ' · ' + c.date
+    if (dotsEl) dotsEl.textContent = countdownIdx + 1 + ' / ' + items.length
+  }
+  paint()
+
+  if (items.length > 1) {
+    let startX = 0
+    let startY = 0
+    let tracking = false
+    let moved = false
+    box.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return
+      startX = e.clientX
+      startY = e.clientY
+      tracking = true
+      moved = false
+    })
+    box.addEventListener('pointermove', (e) => {
+      if (!tracking) return
+      if (Math.abs(e.clientX - startX) > 12 && Math.abs(e.clientX - startX) > Math.abs(e.clientY - startY)) moved = true
+    })
+    const finish = (e) => {
+      if (!tracking) return
+      tracking = false
+      if (!moved) return
+      const dx = e.clientX - startX
+      if (Math.abs(dx) > 40) {
+        if (dx < 0) countdownIdx = (countdownIdx + 1) % items.length
+        else countdownIdx = (countdownIdx - 1 + items.length) % items.length
+        paint()
+      }
+    }
+    box.addEventListener('pointerup', finish)
+    box.addEventListener('pointercancel', finish)
+  }
+  return box
+}
+
 /** 首页日历卡片：整张卡是入口，点某天带着那天进日历页 */
 function cardCalendar() {
   const todos = colRecords('todos')
@@ -612,11 +714,13 @@ function listBlock(rows, rowFn, emptyText) {
 
 function greeting() {
   const hh = new Date().getHours()
-  if (hh < 6) return '夜深了'
-  if (hh < 11) return '早上好'
-  if (hh < 14) return '中午好'
-  if (hh < 18) return '下午好'
-  return '晚上好'
+  let g
+  if (hh < 6) g = '夜深了'
+  else if (hh < 11) g = '早上好'
+  else if (hh < 14) g = '中午好'
+  else if (hh < 18) g = '下午好'
+  else g = '晚上好'
+  return greetWithNickname(g, S.meta.nickname)
 }
 
 function stat(label, n, route) {

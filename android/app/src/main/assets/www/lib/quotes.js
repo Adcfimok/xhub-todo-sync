@@ -7,6 +7,10 @@
  */
 
 export const LOCAL_QUOTES = [
+  // 带 {name} 占位的语料：设置了称呼后会把占位替换成称呼，没设置回退成「朋友」
+  { content: '{name}，今天也要元气满满。', from: '问候' },
+  { content: '{name}，认真生活的每一天都算数。', from: '问候' },
+  { content: '{name}，慢一点也没关系，别停下就好。', from: '问候' },
   { content: '日拱一卒，功不唐捐。', from: '格言' },
   { content: '路漫漫其修远兮，吾将上下而求索。', from: '屈原·离骚' },
   { content: '宝剑锋从磨砺出，梅花香自苦寒来。', from: '警世贤文' },

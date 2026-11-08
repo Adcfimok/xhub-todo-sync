@@ -603,5 +603,33 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        /** 后台保活：启动前台服务，保证后台能收通知与同步 */
+        @JavascriptInterface
+        public void startKeepAlive() {
+            try {
+                KeepAliveService.start(ctx);
+            } catch (Throwable ignore) {
+            }
+        }
+
+        @JavascriptInterface
+        public void stopKeepAlive() {
+            try {
+                KeepAliveService.stop(ctx);
+            } catch (Throwable ignore) {
+            }
+        }
+
+        /** 桌面小组件：把待办摘要与今日课表写进 SharedPreferences 并刷新 */
+        @JavascriptInterface
+        public void setWidgetData(final String todo, final String timetable) {
+            try {
+                android.content.SharedPreferences sp = ctx.getSharedPreferences("xhub_widget", android.content.Context.MODE_PRIVATE);
+                sp.edit().putString("todo", todo == null ? "" : todo).putString("timetable", timetable == null ? "" : timetable).apply();
+                WidgetProvider.updateAll(ctx);
+            } catch (Throwable ignore) {
+            }
+        }
     }
 }

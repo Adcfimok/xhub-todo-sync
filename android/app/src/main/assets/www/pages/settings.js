@@ -33,6 +33,7 @@ function render() {
   if (S.conflicts.length) scroll.appendChild(conflictCard())
   scroll.appendChild(displayCard())
   scroll.appendChild(notifyCard())
+  scroll.appendChild(keepAliveCard())
   scroll.appendChild(aboutCard())
   if (paired) scroll.appendChild(unpairCard())
   scroll.appendChild(h('div', { class: 'list-pad' }))
@@ -284,6 +285,40 @@ function notifyCard() {
           onchange: async (e) => {
             await saveMeta('notifyTodo', e.target.checked ? '1' : '0')
             toast(e.target.checked ? '已开启提醒' : '已关闭提醒')
+          },
+        }),
+        h('span', { class: 'knob' }),
+      ]),
+    ]),
+  ])
+}
+
+function keepAliveCard() {
+  const on = S.meta.keepAlive === '1'
+  return h('div', { class: 'card' }, [
+    h('h2', { text: '后台运行' }),
+    h('div', { class: 'switch-row' }, [
+      h('div', { class: 'switch-meta' }, [
+        h('div', { class: 'switch-title', text: '后台保活' }),
+        h('div', { class: 'switch-sub', text: '以低优先级前台服务保持后台运行，及时接收提醒与同步；通知栏会常驻一条提示' }),
+      ]),
+      h('label', { class: 'toggle' }, [
+        h('input', {
+          type: 'checkbox',
+          checked: on,
+          onchange: async (e) => {
+            const v = e.target.checked ? '1' : '0'
+            await saveMeta('keepAlive', v)
+            const A = window.Android
+            if (A) {
+              try {
+                if (e.target.checked) A.startKeepAlive()
+                else A.stopKeepAlive()
+              } catch (err) {
+                /* 老桥没有保活方法，忽略 */
+              }
+            }
+            toast(e.target.checked ? '已开启后台保活' : '已关闭后台保活')
           },
         }),
         h('span', { class: 'knob' }),
