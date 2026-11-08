@@ -1,8 +1,24 @@
-import { S, saveMeta } from '../lib/core.js'
+import { S, saveMeta, applyMeta } from '../lib/core.js'
 import { h, closeSheet, toast, confirmAsync } from '../lib/ui.js'
 import { PLATFORM_URL, PRESET_FALLBACK, isPlatformLogin, ptToken, platformModels } from '../lib/platform.js'
 import { requestText, openExternal } from '../lib/native.js'
 import { runAgent, buildSystemPrompt } from '../lib/agent.js'
+import {
+  MAX_SESSIONS,
+  IDX_KEY,
+  ACTIVE_KEY,
+  chatKey,
+  newSessionId,
+  clampMessages,
+  makeSession,
+  refreshSession,
+  upsertSession,
+  removeSessions,
+  sessionMessages,
+  initStore,
+  groupSessions,
+  fmtTime,
+} from '../lib/chatStore.js'
 
 export const meta = { title: 'AI 助手', route: 'ai' }
 
@@ -12,20 +28,50 @@ const EXT_ICON =
 
 let rootEl = null
 let messages = []
+let sessions = []
+/** '' = 尚未发出第一条消息的新对话草稿；有值 = 正在查看 / 继续某个历史会话 */
+let activeId = ''
 let sending = false
 let abortCtl = null
 let lastUsage = null
 let lastElapsed = 0
+/** 历史面板：批量选择模式与勾选集合 */
+let histPanel = null
+let selecting = false
+let selected = new Set()
 
 export function mount(root) {
   rootEl = root
-  messages = Array.isArray(S.meta.aiMessages) ? S.meta.aiMessages.slice(-60) : []
+  const init = initStore(S.meta)
+  sessions = init.sessions
+  activeId = init.activeId
   lastUsage = null
   lastElapsed = 0
+  // 旧版 aiMessages 的迁移：applyMeta 会**同步**把 writes 写进 S.meta（落盘在后台），
+  // 必须先执行再读消息，否则升级后首次进 AI 页会看到一条空会话。
+  if (init.writes.length) applyMeta(init.writes)
+  messages = activeId ? sessionMessages(S.meta, activeId) : []
   render()
   return () => {
     if (abortCtl) abortCtl.abort()
+    closeHistory()
   }
+}
+
+function currentTitle() {
+  const s = sessions.filter((x) => x.id === activeId)[0]
+  return s ? s.title : '新对话'
+}
+
+/** 一次事务落盘：消息体 + 索引 + 当前指针，三者要么一起成功要么一起不动 */
+async function persist() {
+  if (!activeId) return
+  const msgs = clampMessages(messages)
+  messages = msgs
+  const now = Date.now()
+  const cur = sessions.filter((s) => s.id === activeId)[0] || makeSession(activeId, msgs, now)
+  sessions = upsertSession(sessions, refreshSession(cur, msgs, now))
+  await applyMeta([[chatKey(activeId), msgs], [IDX_KEY, sessions], [ACTIVE_KEY, activeId]])
 }
 
 function cfg() {
@@ -61,6 +107,8 @@ function render() {
           h('h2', { text: '先配置模型' }),
           h('p', { class: 'muted', text: '填一个 OpenAI 兼容接口就能直接对话：请求由手机自己发出，不需要电脑。密钥只存在这台手机上。' }),
           h('button', { class: 'btn primary block', type: 'button', text: '配置接口', onclick: openConfig }),
+          // 即使换了模型 / 清了 Key，历史对话也必须还能翻出来看
+          h('button', { class: 'btn block hist-open', type: 'button', text: '查看历史对话（' + sessions.length + '）', onclick: openHistory }),
         ]),
         h('div', { class: 'card' }, [
           h('h2', { text: '能做什么' }),
@@ -78,17 +126,20 @@ function render() {
   rootEl.appendChild(
     h('div', { class: 'chat-tools' }, [
       h('span', { class: 'chat-model', text: (c.platform ? '平台 · ' : '') + c.model }),
+      h('button', { class: 'mini', type: 'button', id: 'btn-chat-history', text: '历史 ' + sessions.length, 'aria-label': '历史对话', onclick: openHistory }),
       h('button', { class: 'mini', type: 'button', text: '⚙', 'aria-label': '设置', onclick: openConfig }),
       h('button', { class: 'mini', type: 'button', id: 'btn-new-chat', text: '+ 新对话', onclick: newChat }),
     ])
   )
+  rootEl.appendChild(sessionBar())
 
   const scroll = h('div', { class: 'chat-scroll', id: 'chat-scroll' })
   if (!messages.length) {
     scroll.appendChild(
       h('div', { class: 'chat-empty' }, [
-        h('p', { class: 'empty-t', text: '问点什么' }),
+        h('p', { class: 'empty-t', text: activeId ? '继续这段对话' : '问点什么' }),
         h('p', { class: 'empty-s', text: '试试：帮我建一条明天下午三点的待办，标题是交房租' }),
+        activeId ? null : h('p', { class: 'empty-s', text: '这是新对话，发出第一条消息后自动保存；点顶部「历史」能回到此前的对话。' }),
         h(
           'div',
           { class: 'quick' },
@@ -173,14 +224,17 @@ function stop() {
   render()
 }
 
-async function newChat() {
-  if (sending) return
-  if (messages.length && !(await confirmAsync('开始新对话？当前记录会清空。', '新对话'))) return
+/** 新建对话：只把指针拨回草稿态，已有的历史会话一条都不动，也不需要二次确认 */
+function newChat() {
+  if (sending) return toast('正在回复，先停止或等回复结束')
+  closeHistory()
+  activeId = ''
   messages = []
   lastUsage = null
   lastElapsed = 0
-  await saveMeta('aiMessages', [])
+  applyMeta([[ACTIVE_KEY, '']])
   render()
+  toast('已开始新对话，历史记录都还在')
 }
 
 async function send(text) {
@@ -195,6 +249,16 @@ async function send(text) {
     return
   }
 
+  // 懒创建：新对话只有在真的发出第一条消息时才落成一条历史记录，
+  // 否则反复点「+ 新对话」会在列表里堆出一串空会话。
+  if (!activeId) {
+    if (sessions.length >= MAX_SESSIONS) {
+      toast('历史对话已达 ' + MAX_SESSIONS + ' 条，请先删除一些再新建')
+      return
+    }
+    activeId = newSessionId()
+  }
+
   const history = messages
     .filter((m) => m.content && (m.role === 'user' || m.role === 'assistant'))
     .map((m) => ({ role: m.role, content: m.content }))
@@ -204,6 +268,8 @@ async function send(text) {
   messages.push(ai)
   sending = true
   lastUsage = null
+  // 先把「提问 + 占位回复」落盘：万一中途被系统杀掉或断网，用户问过什么不会丢
+  await persist()
   render()
   const scroll = document.getElementById('chat-scroll')
   if (scroll) scroll.scrollTop = scroll.scrollHeight
@@ -251,7 +317,8 @@ async function send(text) {
     abortCtl = null
     sending = false
     lastElapsed = Date.now() - t0
-    await saveMeta('aiMessages', messages)
+    // 成功 / 出错 / 主动停止都走这里，完整回复与会话元数据一次落盘
+    await persist()
     render()
   }
 }
@@ -307,6 +374,178 @@ function statsText() {
     parts.push(((u.output / lastElapsed) * 1000).toFixed(0) + ' tok/s')
   }
   return parts.join(' · ')
+}
+
+// ---------------------------------------------------------------- 历史对话
+
+/** 当前会话状态条：把「新对话」与「历史对话」在界面上明确分开 */
+function sessionBar() {
+  const isNew = !activeId
+  return h('div', { class: 'chat-session' + (isNew ? ' is-new' : '') }, [
+    h('span', { class: 'chat-session-tag', text: isNew ? '✦ 新对话' : '↺ 历史对话' }),
+    h('span', { class: 'chat-session-name', text: isNew ? '发第一条消息后自动保存' : currentTitle() }),
+    h('span', { class: 'chat-session-meta', text: isNew ? '' : messages.length + ' 条' }),
+  ])
+}
+
+function openHistory() {
+  if (sending) return toast('正在回复，先停止或等回复结束')
+  if (histPanel) return
+  selecting = false
+  selected = new Set()
+  const mask = h('div', { class: 'hist-mask' })
+  const panel = h('div', { class: 'hist-panel' })
+  mask.appendChild(panel)
+  document.body.appendChild(mask)
+  mask.addEventListener('click', (e) => {
+    if (e.target === mask) closeHistory()
+  })
+  histPanel = { mask, panel }
+  paintHistory()
+}
+
+function closeHistory() {
+  if (!histPanel) return
+  histPanel.mask.remove()
+  histPanel = null
+  selecting = false
+  selected = new Set()
+}
+
+function paintHistory() {
+  if (!histPanel) return
+  const panel = histPanel.panel
+  panel.innerHTML = ''
+  panel.appendChild(
+    h('div', { class: 'hist-head' }, [
+      h('b', { text: '历史对话 · ' + sessions.length + ' 条' }),
+      h('button', { class: 'mini', type: 'button', text: '关闭', onclick: closeHistory }),
+    ])
+  )
+  panel.appendChild(
+    h('div', { class: 'hist-tools' }, [
+      h('button', {
+        class: 'mini',
+        type: 'button',
+        text: selecting ? '取消选择' : '批量选择',
+        onclick: () => {
+          selecting = !selecting
+          selected = new Set()
+          paintHistory()
+        },
+      }),
+      selecting
+        ? h('button', {
+            class: 'mini',
+            type: 'button',
+            text: '全选',
+            onclick: () => {
+              selected = new Set(sessions.map((s) => s.id))
+              paintHistory()
+            },
+          })
+        : null,
+      selecting
+        ? h('button', {
+            class: 'mini danger' + (selected.size ? '' : ' disabled'),
+            type: 'button',
+            text: '删除选中（' + selected.size + '）',
+            onclick: () => deleteSessions(Array.from(selected)),
+          })
+        : null,
+    ])
+  )
+  panel.appendChild(h('p', { class: 'hist-hint', text: '点一条对话即可查看并继续提问；删除前会再确认一次。' }))
+
+  const list = h('div', { class: 'hist-list' })
+  if (!sessions.length) {
+    list.appendChild(
+      h('div', { class: 'empty' }, [
+        h('p', { class: 'empty-t', text: '还没有历史对话' }),
+        h('p', { class: 'empty-s', text: '发出第一条消息后，这段对话会自动保存在这里。' }),
+      ])
+    )
+  }
+  groupSessions(sessions, Date.now()).forEach((g) => {
+    list.appendChild(h('div', { class: 'hist-group', text: g.label }))
+    g.items.forEach((s) => {
+      const row = h('div', { class: 'hist-row' + (s.id === activeId ? ' on' : '') })
+      if (selecting) {
+        const cb = h('input', { type: 'checkbox', class: 'hist-check' })
+        cb.checked = selected.has(s.id)
+        cb.addEventListener('change', () => {
+          if (cb.checked) selected.add(s.id)
+          else selected.delete(s.id)
+          paintHistory()
+        })
+        row.appendChild(cb)
+      }
+      row.appendChild(
+        h('button', { class: 'hist-main', type: 'button', onclick: () => switchSession(s.id) }, [
+          h('div', { class: 'hist-title' }, [
+            h('b', { text: s.title }),
+            s.id === activeId ? h('span', { class: 'hist-cur', text: '当前' }) : null,
+          ]),
+          h('span', { class: 'hist-preview', text: s.preview }),
+          h('span', { class: 'hist-meta', text: fmtTime(s.updatedAt, Date.now()) + ' · ' + s.count + ' 条消息' }),
+        ])
+      )
+      if (!selecting) {
+        row.appendChild(h('button', { class: 'mini danger', type: 'button', text: '删除', onclick: () => deleteSessions([s.id]) }))
+      }
+      list.appendChild(row)
+    })
+  })
+  panel.appendChild(list)
+}
+
+/** 查看 / 继续：换指针、载入该会话消息、滚到最新一条；之后发消息会继续写进这个会话 */
+async function switchSession(id) {
+  if (sending) return toast('正在回复，先停止或等回复结束')
+  if (id === activeId) {
+    closeHistory()
+    return
+  }
+  activeId = id
+  messages = sessionMessages(S.meta, id)
+  lastUsage = null
+  lastElapsed = 0
+  await applyMeta([[ACTIVE_KEY, id]])
+  closeHistory()
+  render()
+  toast('已切换到「' + currentTitle() + '」，可以直接继续提问')
+}
+
+/** 单条 / 批量删除共用：一律先确认，删的是消息 key 本身而不是留空壳 */
+async function deleteSessions(ids) {
+  if (!ids || !ids.length) return
+  if (sending) return toast('正在回复，先停止或等回复结束')
+  const titleOf = (id) => {
+    const s = sessions.filter((x) => x.id === id)[0]
+    return s ? s.title : '对话'
+  }
+  const text =
+    ids.length === 1
+      ? '删除对话「' + titleOf(ids[0]) + '」？删除后不可恢复。'
+      : '删除选中的 ' + ids.length + ' 条对话？删除后不可恢复。'
+  if (!(await confirmAsync(text, '删除'))) return
+
+  const wasActive = ids.indexOf(activeId) >= 0
+  const remaining = removeSessions(sessions, ids)
+  const deletes = ids.map((id) => chatKey(id))
+  sessions = remaining
+  if (wasActive) {
+    activeId = ''
+    messages = []
+    lastUsage = null
+    lastElapsed = 0
+  }
+  selecting = false
+  selected = new Set()
+  await applyMeta([[IDX_KEY, sessions], [ACTIVE_KEY, activeId]], deletes)
+  closeHistory()
+  render()
+  toast('已删除 ' + ids.length + ' 条对话')
 }
 
 // ---------------------------------------------------------------- 配置面板
@@ -643,15 +882,15 @@ function openConfig() {
   document.getElementById('btn-cancel').onclick = closeSheet
   mask.onclick = closeSheet
 
-  if (messages.length) {
-    document.getElementById('btn-delete').hidden = false
-    document.getElementById('btn-delete').textContent = '清空对话'
-    document.getElementById('btn-delete').onclick = async () => {
+  // 「清空对话」改成「删除当前对话」：语义与历史列表的单条删除一致，
+  // 不再出现「清空了但历史里还留着一条空壳」的两套说法
+  if (activeId) {
+    const del = document.getElementById('btn-delete')
+    del.hidden = false
+    del.textContent = '删除当前对话'
+    del.onclick = async () => {
       closeSheet()
-      if (!(await confirmAsync('清空全部对话记录？'))) return
-      messages = []
-      await saveMeta('aiMessages', [])
-      render()
+      await deleteSessions([activeId])
     }
   }
 

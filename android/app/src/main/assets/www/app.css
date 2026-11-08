@@ -966,6 +966,69 @@ select.input { appearance: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.hist-open { margin-top: 8px; }
+
+/* 当前会话状态条：新对话 / 历史对话一眼可辨 */
+.chat-session {
+  flex: none;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 16px 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.chat-session.is-new { border-color: var(--accent); background: var(--pri-soft); }
+.chat-session-tag { flex: none; font-weight: 600; color: var(--accent); }
+.chat-session-name { flex: 1; min-width: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-session-meta { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* 历史对话面板：z-index 低于确认框(50)，删除确认能正常盖在上面 */
+.hist-mask {
+  position: fixed; inset: 0;
+  z-index: 45;
+  display: flex; align-items: flex-end;
+  background: rgba(0, 0, 0, .5);
+  animation: fade .16s ease-out;
+}
+.hist-panel {
+  width: 100%;
+  max-height: 76vh;
+  display: flex; flex-direction: column;
+  padding: 12px 14px calc(14px + var(--safe-b));
+  border-radius: 20px 20px 0 0;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -16px 48px rgba(0, 0, 0, .34);
+  animation: up .22s cubic-bezier(.2, .8, .3, 1);
+}
+.hist-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hist-head b { font-size: 15px; }
+.hist-tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.hist-tools .mini.disabled { opacity: .45; }
+.hist-tools .mini.danger, .hist-row .mini.danger { color: var(--red); }
+.hist-hint { margin: 2px 2px 8px; font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+.hist-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.hist-group { padding: 8px 4px 4px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+.hist-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; margin-bottom: 8px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card);
+}
+.hist-row.on { border-color: var(--accent); background: var(--glass-sel); }
+.hist-check { flex: none; width: 17px; height: 17px; accent-color: var(--accent); }
+.hist-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 0; border: none; background: none; text-align: left;
+  color: var(--ink); cursor: pointer;
+}
+.hist-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hist-title b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-cur { flex: none; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+.hist-preview, .hist-meta { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* AI 页底部有输入胶囊：留白跟着底栏一起抬，输入框永远在胶囊上沿之上 */
 .composer {

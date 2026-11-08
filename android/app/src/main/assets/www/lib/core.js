@@ -8,9 +8,9 @@ export const DB_VER = 2
 export const APP_VER = (function () {
   try {
     const v = window.Android && window.Android.appVersion && window.Android.appVersion()
-    return (v && String(v)) || '3.2.0'
+    return (v && String(v)) || '3.3.0'
   } catch (e) {
-    return '3.2.0'
+    return '3.3.0'
   }
 })()
 
@@ -57,6 +57,7 @@ export function idbWrite(ops) {
           if (op.type === 'put') recs.put(op.value)
           else if (op.type === 'del') recs.delete(op.key)
           else if (op.type === 'meta') meta.put({ k: op.key, v: op.value })
+          else if (op.type === 'metaDel') meta.delete(op.key)
         })
         tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)
@@ -161,6 +162,27 @@ export function findRec(id) {
 export function saveMeta(key, value) {
   S.meta[key] = value
   return idbWrite([{ type: 'meta', key, value }])
+}
+
+/**
+ * 一次事务里写多个 meta 键并删掉若干键（AI 历史会话的索引 + 消息体 + 删除要原子完成）。
+ * writes: [[key, value], ...]；deletes: [key, ...]。S.meta 与落盘同步更新。
+ */
+export function applyMeta(writes, deletes) {
+  const ops = []
+  ;(writes || []).forEach((pair) => {
+    S.meta[pair[0]] = pair[1]
+    ops.push({ type: 'meta', key: pair[0], value: pair[1] })
+  })
+  ;(deletes || []).forEach((key) => {
+    delete S.meta[key]
+    ops.push({ type: 'metaDel', key })
+  })
+  return idbWrite(ops)
+}
+
+export function delMeta(key) {
+  return applyMeta([], [key])
 }
 
 // ---------------------------------------------------------------- 记录
