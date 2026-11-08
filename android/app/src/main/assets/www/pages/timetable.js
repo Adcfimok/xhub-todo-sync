@@ -2,6 +2,7 @@ import { S, saveMeta } from '../lib/core.js'
 import { h, toast, confirmAsync, openForm } from '../lib/ui.js'
 import { writeClipboard, hasEduBrowser, openEduImport, closeEduImport, waitEduCapture } from '../lib/native.js'
 import { EDU_PRESETS, parseEduText, mergeTimetable } from '../lib/edu.js'
+import { SCHOOLS, SCHOOL_SOURCE } from '../lib/schools.js'
 import {
   weekOfTerm,
   coursesOnDay,
@@ -364,11 +365,13 @@ async function exportJson() {
 
 /**
  * 流程照搬 WakeUp 课程表（其 assets/empty.html 的提示）：
- * 填教务网址 → 内置浏览器打开 → 用户自己登录 → 点到课表界面 → 点「导入当前页」。
- * 学校列表无法内置（各校地址不同且会变），所以网址由用户填；类型只影响操作提示。
+ * 选学校/填教务网址 → 内置浏览器打开 → 用户自己登录 → 点到课表界面 → 点「导入当前页」。
+ * 3.4.0 起内置了从该 App 解密出的 3570 条学校列表（3091 条带教务网址），
+ * 选学校会自动填网址；网址仍可手改，因为是离线快照，网址可能失效。详见 lib/schools.js 与 docs/16。
  */
 function importFromEdu() {
   let preset = S.meta.eduPreset || 'other'
+  let chosen = null
   const urlInput = h('input', { class: 'input', type: 'url', inputmode: 'url', placeholder: 'https://jw.xxx.edu.cn', value: S.meta.eduUrl || '' })
   const hint = h('p', { class: 'lib-hint', text: presetHint(preset) })
   const chips = h('div', { class: 'edu-presets' })
@@ -391,7 +394,31 @@ function importFromEdu() {
   const mask = openMask(
     h('div', { class: 'lib-card' }, [
       h('div', { class: 'lib-head' }, [h('b', { text: '教务系统一键导入' }), h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => mask.remove() })]),
-      h('p', { class: 'lib-hint', text: '选教务类型、填学校教务首页地址，点「打开」后会进入内置浏览器。' }),
+      h('p', { class: 'lib-hint', text: '从内置的学校列表里选学校（自动填教务网址），或自己填教务首页地址；点「打开」进入内置浏览器。' }),
+      h('button', {
+        class: 'btn block school-pick-btn',
+        type: 'button',
+        text: '从学校列表选择（' + SCHOOL_SOURCE.withUrl + ' 所带网址）',
+        onclick: () =>
+          openSchoolPicker((row) => {
+            chosen = row
+            // 源数据里有 9 所学校把多个备选网址用换行拼在一起，只取第一个可用地址
+            const parts = String(row[1]).split(/[\r\n]+/)
+            const first = parts[0].trim()
+            // 原列表里约 50 条不是标准 http(s)：有裸域名/内网 IP（可用），
+            // 也有「是」「校外http://…校内http://…」这类脏值（不能塞进地址栏）。
+            const looksUrl = /^(https?:\/\/)?[a-z0-9.-]+(:\d+)?(\/|$)/i.test(first) || /^(\d{1,3}\.){3}\d{1,3}/.test(first)
+            const head = '已选「' + row[0] + '」· 教务类型 ' + row[2] + ' · 导入方式 ' + row[3] + '。'
+            if (!looksUrl) {
+              urlInput.value = ''
+              hint.textContent = head + '来源列表里这项的网址不是有效地址（原值：' + first.slice(0, 30) + '），请手动填写学校教务网址。'
+              return
+            }
+            urlInput.value = first
+            hint.textContent = head + '网址已自动填入，仍可手动修改。' +
+              (parts.length > 1 ? '该校有 ' + parts.length + ' 个备选网址，已取第一个。' : '')
+          }),
+      }),
       chips,
       hint,
       urlInput,
@@ -401,7 +428,8 @@ function importFromEdu() {
         text: '打开教务系统',
         onclick: () => {
           const url = urlInput.value.trim()
-          if (!url) return toast('先填学校教务系统网址')
+          if (!url) return toast('先选学校或填学校教务系统网址')
+          saveMeta('eduSchool', chosen ? chosen[0] : '')
           mask.remove()
           if (!hasEduBrowser()) {
             toast('这版没有内置浏览器，改用「粘贴页面源码」导入')
@@ -412,8 +440,77 @@ function importFromEdu() {
         },
       }),
       h('p', { class: 'lib-hint', text: '账号密码只输在教务系统自己的页面里，本 App 不读取、不保存、不上传；抓取到的页面只在本机解析。' }),
+      h('p', { class: 'lib-hint', text: '学校与教务网址来自 ' + SCHOOL_SOURCE.app + ' 内置列表（共 ' + SCHOOL_SOURCE.total + ' 条，' + SCHOOL_SOURCE.withUrl + ' 条带网址），是离线快照，网址可能失效，可随时手动改。' }),
     ])
   )
+}
+
+/**
+ * 学校选择器：3570 条一次全渲染会卡，所以按关键词过滤 + 每次只画 60 条，
+ * 「加载更多」可以一路翻完整个列表；没有匹配时仍可回到输入框手填网址。
+ * onPick 收到 [name, url, type, importType, sortKey]。
+ */
+function openSchoolPicker(onPick) {
+  const mask = h('div', { class: 'school-mask' })
+  const panel = h('div', { class: 'school-panel' })
+  const search = h('input', { class: 'input school-search', type: 'search', placeholder: '输入学校名称，或拼音首字母（如 A）' })
+  const count = h('span', { class: 'school-count' })
+  const list = h('div', { class: 'school-list' })
+  let matches = []
+  let shown = 0
+  let moreBtn = null
+
+  function more() {
+    const slice = matches.slice(shown, shown + 60)
+    slice.forEach((r) => {
+      list.appendChild(
+        h('button', { class: 'school-row', type: 'button', onclick: () => { mask.remove(); onPick(r) } }, [
+          h('div', { class: 'school-row-top' }, [
+            h('b', { text: r[0] }),
+            h('span', { class: 'school-type', text: r[2] || '通用' }),
+          ]),
+          h('span', { class: 'school-url', text: r[1] }),
+        ])
+      )
+    })
+    shown += slice.length
+    if (!matches.length) list.appendChild(h('p', { class: 'lib-hint', text: '没有匹配的学校，可以直接在输入框里填教务网址。' }))
+    if (moreBtn) {
+      moreBtn.hidden = shown >= matches.length
+      moreBtn.textContent = '加载更多（还有 ' + Math.max(0, matches.length - shown) + ' 所）'
+    }
+  }
+
+  function filter(q) {
+    const s = String(q || '').trim().toLowerCase()
+    // 只列带教务网址的具体学校；无网址的是「正方教务 / URP 系统」这类通用导入方式
+    matches = SCHOOLS.filter(
+      (r) => r[1] && (!s || r[0].toLowerCase().indexOf(s) >= 0 || String(r[4] || '').toLowerCase().indexOf(s) === 0)
+    )
+    shown = 0
+    list.innerHTML = ''
+    count.textContent = '共 ' + matches.length + ' 所学校 · ' + SCHOOL_SOURCE.app + ' 内置列表'
+    more()
+  }
+
+  moreBtn = h('button', { class: 'btn block', type: 'button', text: '加载更多', onclick: more })
+  panel.appendChild(
+    h('div', { class: 'school-head' }, [
+      h('b', { text: '选择学校' }),
+      h('button', { class: 'mini', type: 'button', text: '关闭', onclick: () => mask.remove() }),
+    ])
+  )
+  panel.appendChild(search)
+  panel.appendChild(count)
+  panel.appendChild(list)
+  panel.appendChild(moreBtn)
+  panel.appendChild(h('p', { class: 'school-src', text: '数据来源：WakeUp课程表 6.5.2 内置「导入教务系统课表」列表，共 ' + SCHOOL_SOURCE.total + ' 条；其中 ' + SCHOOL_SOURCE.withUrl + ' 条带教务网址，此处只显示这些。' }))
+  mask.appendChild(panel)
+  document.body.appendChild(mask)
+  mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove() })
+  search.addEventListener('input', () => filter(search.value))
+  filter('')
+  setTimeout(() => search.focus(), 120)
 }
 
 function presetHint(id) {

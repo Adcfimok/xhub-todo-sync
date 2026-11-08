@@ -146,7 +146,7 @@ try {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.3.0',
+      appVersion: () => '3.4.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -272,7 +272,7 @@ try {
   const errors2 = []
   page2.on('pageerror', (e) => errors2.push(String(e.message || e)))
   await page2.addInitScript(() => {
-    window.Android = { originPort: () => 47830, appVersion: () => '3.3.0', readClipboard: () => '', writeClipboard: () => {}, vibrate: () => {}, toast: () => {}, openUrl: () => {} }
+    window.Android = { originPort: () => 47830, appVersion: () => '3.4.0', readClipboard: () => '', writeClipboard: () => {}, vibrate: () => {}, toast: () => {}, openUrl: () => {} }
   })
   await page2.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
   await page2.waitForTimeout(600)
