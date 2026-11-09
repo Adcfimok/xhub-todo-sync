@@ -220,6 +220,12 @@
       "version": "3.7.0",
       "kind": "android-apk",
       "file": "android/todo-link-3.7.0.apk"
+    },
+    {
+      "id": "android-apk-3.7.1",
+      "version": "3.7.1",
+      "kind": "android-apk",
+      "file": "android/todo-link-3.7.1.apk"
     }
   ]
 }
