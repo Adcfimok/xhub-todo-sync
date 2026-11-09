@@ -1,10 +1,10 @@
 {
   "repo": "Adcfimok/xhub-todo-sync",
   "mode": "api",
-  "checkedAt": "2026-11-08T17:10:20.927Z",
+  "checkedAt": "2026-11-09T02:31:17.227Z",
   "counts": {
-    "total": 34,
-    "ok": 34,
+    "total": 35,
+    "ok": 35,
     "drift": 0,
     "warn": 0
   },
@@ -824,6 +824,30 @@
       },
       "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/xhub-ext-v3.7.0/com.zhou.todo-relay-3.7.0.zip",
       "tagCommit": "8a524551291808a9103871f55d546c8d038c690f",
+      "issues": []
+    },
+    {
+      "id": "android-apk-3.7.1",
+      "version": "3.7.1",
+      "kind": "android-apk",
+      "tag": "android-v3.7.1",
+      "file": "android/todo-link-3.7.1.apk",
+      "status": "ok",
+      "artifact": {
+        "bytes": 409936,
+        "sha256": "ba63b4a730585c33015a6105a58d273be99258d8f27babfcb09b7f4cc6bf521f",
+        "commit": "f850d759f338157e1d708e1d7a0f7275424da7c5",
+        "pushed": true
+      },
+      "release": {
+        "url": "https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.7.1",
+        "tag": "android-v3.7.1",
+        "assets": [
+          "todo-link-3.7.1.apk"
+        ]
+      },
+      "assetUrl": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.7.1/todo-link-3.7.1.apk",
+      "tagCommit": "f850d759f338157e1d708e1d7a0f7275424da7c5",
       "issues": []
     }
   ]

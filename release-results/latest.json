@@ -36,7 +36,8 @@
     "android-apk-3.6.0",
     "xhub-ext-3.6.0",
     "android-apk-3.7.0",
-    "xhub-ext-3.7.0"
+    "xhub-ext-3.7.0",
+    "android-apk-3.7.1"
   ],
   "results": [
     {
@@ -650,11 +651,29 @@
       "commit": "8a524551291808a9103871f55d546c8d038c690f",
       "notes": "# x-hub 待办同步扩展 3.7.0\n\n本次为元数据跟随发布，扩展功能与 3.6.0 一致。\n\n## 变更\n\n- `manifest.json` 版本号 → 3.7.0。\n- 扩展视图的「下载安卓端」入口指向 `android-v3.7.0` 的 APK，体积更新为 409,936 字节。\n\n## 说明\n\n扩展本体没有功能改动；安卓端 3.7.0 修的是提醒可靠性：闹钟计划持久化、到点自动续排、重启后重排、通知与精确闹钟权限可查可引导。\n两端协议（PROTO 2）未变，扩展与旧版安卓端仍可互通。",
       "releaseName": "待办同步扩展 · x-hub v3.7.0"
+    },
+    {
+      "id": "android-apk-3.7.1",
+      "version": "3.7.1",
+      "kind": "android-apk",
+      "file": "android/todo-link-3.7.1.apk",
+      "source": "manifest",
+      "order": null,
+      "status": "success",
+      "reason": null,
+      "bytes": 409936,
+      "sha256": "ba63b4a730585c33015a6105a58d273be99258d8f27babfcb09b7f4cc6bf521f",
+      "target": "https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.7.1/todo-link-3.7.1.apk",
+      "uploadedAt": "2026-11-09T02:30:59.639Z",
+      "tag": "android-v3.7.1",
+      "commit": "f850d759f338157e1d708e1d7a0f7275424da7c5",
+      "notes": "# 待办同步 安卓端 v3.7.1\n\n> 说明依据来源：`android/BUG-AUDIT.md`（工作区安卓端代码审查与缺陷修复报告，覆盖 3.7.1 两轮改动与锁屏通知 P0 修复）。\n> 以下变更条目均可在该报告对应章节核对，未作推测性补充。\n\n## 版本信息\n\n| 项 | 值 | 来源 |\n| --- | --- | --- |\n| versionName / versionCode | 3.7.1 / 32（自 3.7.0 的 31 递增，可覆盖安装） | `aapt dump badging` 实测；`android/BUG-AUDIT.md` 第七节 |\n| 包名 | `com.zhou.todolink` | `aapt dump badging` 实测 |\n| 签名证书 | 与 3.7.0 同一证书（`CN=Todo Link, O=zhou, C=CN`） | `android/BUG-AUDIT.md` 第七节 |\n| 产物大小 | `android/todo-link-3.7.1.apk` 约 400 KB | 工作区文件 |\n\n## 重点修复：锁屏后收不到通知（P0）\n\n用户实测反馈：锁屏后到点无任何通知。根因是 `alerts.js#scheduleAlarms()` 在「当前算不出计划」（如无任何待办）时调用 `cancelAlarms()`，把刚排好的自检闹钟一并撤销；且锁屏瞬间 WebView 不保证收到 `visibilitychange`，最后一条提醒排不上。\n\n修复（详见 `android/BUG-AUDIT.md` 第六节）：\n\n- 空计划改为下发 `setAlarms('[]')`，走差量撤槽位逻辑，保留原生独有条目（如通知自检）。\n- `MainActivity.onPause()` 新增 `flushAlarms()`，息屏/切后台时把计划钉进系统。\n- `app.js` 暴露 `window.__flushAlarms` 供原生 `onPause` 调用。\n- `Reminders.testIn()` 修正连点自检残留；`Reminders.notify()` 失败从静默改为 `Log.w`。\n\n## 缺陷修复汇总（共 26 处，分两轮）\n\n第二轮确认并修复 26 处缺陷，按维度归类（位置与根因见 `android/BUG-AUDIT.md` 第二、三节）：\n\n- **逻辑错误（A1–A4）**：提醒去重方向反了导致改时间后新提醒不响；旧闹钟迟到广播误删新提醒；无 `at` 字段的旧闹钟误删无关提醒；下载落盘成功却误报失败。\n- **边界条件（B1–B5）**：`isPdf` 数组越界；极窄超长页面渲染 OOM；传输响应体无上限可被撑爆内存；3xx 被当成成功；并发选文件导致前一个 Promise 永挂。\n- **异常处理缺失（C1–C4）**：渲染进程被回收致闪退；前台服务起不来 5 秒后必崩；停机竞态打死 accept 线程并泄漏 socket；PDF 首页 Page 句柄泄漏。\n- **内存 / 资源泄漏（D1–D7）**：WebView 未脱离 View 树就销毁；`PermissionRequest` 被覆盖后永久悬挂；销毁后仍向 WebView 注入 JS；`abort` 在写请求体期间是空操作；PDF 流解压内存失控；MediaStore 残留半成品行；图标文件被并发读到半成品。\n- **第二轮（E1–E6）**：到点重排重复播报；计划读改写跨线程竞态；自检提醒被普通重排清掉；前台通知在通知栏越堆越多；渲染缓存键不含文件内容指纹；开机广播里同步做磁盘 IO。\n\n说明：上述条目均属「补齐判断 / 调整顺序 / 加界限 / 串行化复合写」，未改动对外方法签名、JSON 字段语义或 JS 桥接口，前端无需同步修改。\n\n## 回归\n\n| 项 | 结果 |\n| --- | --- |\n| `node --test _tools/release-upload/upload.test.mjs` 等 JS 单测 | 153 / 153（据 `android/BUG-AUDIT.md`） |\n| `_tools/notify-check.mjs`（含锁屏场景 3） | 30 / 30 |\n\n> 真机 / 模拟器冒烟未做（本机无 adb 与设备），涉及传感器、通知、SAF 的路径建议装机复测。\n\n## 注意\n\n浏览器扩展 `extensions/todo-relay/manifest.json` 仍为 3.7.0；扩展与 APK 独立发布，本次仅出安卓包。",
+      "releaseName": "待办同步 安卓端 v3.7.1"
     }
   ],
   "counts": {
-    "total": 34,
-    "success": 0,
+    "total": 35,
+    "success": 1,
     "failed": 0,
     "skipped": 34,
     "unprocessed": 0
@@ -664,6 +683,6 @@
     "allAccounted": true,
     "uniqueIds": true
   },
-  "startedAt": "2026-11-08T17:09:55.351Z",
-  "finishedAt": "2026-11-08T17:10:01.351Z"
+  "startedAt": "2026-11-09T02:30:50.735Z",
+  "finishedAt": "2026-11-09T02:30:59.639Z"
 }
