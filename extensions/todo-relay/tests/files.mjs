@@ -105,7 +105,7 @@ async function main() {
   ok('admin state 可读', st.status === 200 && !!st.body.pairCode, st.status)
   const paired = await postJson('/api/v1/pair', {
     code: st.body.pairCode,
-    device: { id: 'dev-file-test', name: '测试手机', platform: 'android', appVersion: '3.7.0' },
+    device: { id: 'dev-file-test', name: '测试手机', platform: 'android', appVersion: '3.8.0' },
   })
   ok('配对成功拿到令牌', paired.status === 200 && /^[a-f0-9]{64}$/.test(paired.body.token || ''), paired.body)
   const token = paired.body.token

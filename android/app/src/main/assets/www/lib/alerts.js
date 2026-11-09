@@ -339,7 +339,17 @@ export function scheduleAlarms() {
   })
 
   if (!plan.length) {
-    cancelAlarms()
+    // 「此刻算不出计划」不等于「用户关掉了提醒」，绝不能走 cancelAlarms()。
+    // cancelAlarms → 原生 clearPlan()：把 K_PLAN 置空并撤掉全部槽位，
+    // 会连原生独有的条目（通知自检）一起抹掉。而锁屏 / 切后台都会触发
+    // visibilitychange → scheduleAlarms()，于是「点了 10 秒后测试提醒，锁屏，
+    // 到点什么都不响」——自检闹钟在排上 0.1 秒后就被这里撤掉了。
+    // 改成下发空计划：原生按差量撤掉多余槽位，同时保留仍需触发的自检条目。
+    try {
+      setAlarms('[]')
+    } catch (e) {
+      /* 老版本没有这个桥 */
+    }
     return
   }
   try {

@@ -1,7 +1,23 @@
 import { S, saveMeta, applyMeta } from '../lib/core.js'
 import { h, closeSheet, toast, confirmAsync } from '../lib/ui.js'
-import { PLATFORM_URL, PRESET_FALLBACK, isPlatformLogin, ptToken, platformModels } from '../lib/platform.js'
+import { PRESET_FALLBACK, isPlatformLogin } from '../lib/platform.js'
 import { requestText, openExternal } from '../lib/native.js'
+import { openModelPicker } from '../lib/modelpicker.js'
+import {
+  KIND_CUSTOM,
+  addCustomModel,
+  availability,
+  currentModel,
+  loadProfiles,
+  modelBase,
+  modelKey,
+  modelSubtitle,
+  recoverModel,
+  removeModel,
+  selectModel,
+  syncPlatformModels,
+  updateCustomModel,
+} from '../lib/aimodels.js'
 import { runAgent, buildSystemPrompt } from '../lib/agent.js'
 import {
   MAX_SESSIONS,
@@ -35,6 +51,8 @@ let sending = false
 let abortCtl = null
 let lastUsage = null
 let lastElapsed = 0
+/** 回退提示每次进入页面只说一遍，避免每次重绘都弹 */
+let fallbackNoted = ''
 /** 历史面板：批量选择模式与勾选集合 */
 let histPanel = null
 let selecting = false
@@ -74,25 +92,50 @@ async function persist() {
   await applyMeta([[chatKey(activeId), msgs], [IDX_KEY, sessions], [ACTIVE_KEY, activeId]])
 }
 
+/** 把一个模型条目展开成请求参数；profile 为空表示当前没有可用模型 */
+function cfgFor(profile, extra) {
+  const p = profile || null
+  return Object.assign(
+    {
+      profile: p,
+      platform: !!p && p.kind === 'platform',
+      baseURL: p ? modelBase(p) : '',
+      apiKey: p ? modelKey(p) : '',
+      model: p ? p.model : '',
+      system: S.meta.aiSystem || '',
+      temperature: S.meta.aiTemp == null ? 0.7 : Number(S.meta.aiTemp),
+      blocked: '',
+      fallbackText: '',
+    },
+    extra || {}
+  )
+}
+
 function cfg() {
-  const platform = S.meta.aiPlatform === '1'
-  return {
-    platform,
-    baseURL: platform ? PLATFORM_URL + '/v1' : S.meta.aiBase || '',
-    apiKey: platform ? ptToken() : S.meta.aiKey || '',
-    model: S.meta.aiModel || '',
-    system: S.meta.aiSystem || '',
-    temperature: S.meta.aiTemp == null ? 0.7 : Number(S.meta.aiTemp),
-  }
+  const r = currentModel()
+  return cfgFor(r.profile, {
+    blocked: r.profile ? '' : r.text,
+    fallbackText: r.fallbackFrom ? r.text : '',
+    selected: r.selected,
+  })
 }
 
 function configured() {
-  const c = cfg()
-  return !!(c.model && c.apiKey && c.baseURL)
+  return !!cfg().profile
 }
 
 function endpoint(base) {
   return String(base || '').replace(/\/+$/, '') + '/chat/completions'
+}
+
+/** 顶部/空态共用：打开模型选择器，选完就地重绘 */
+function pickModel() {
+  openModelPicker({
+    title: '选择模型',
+    hint: '确认后立即生效：AI 助手与课表 AI 识别共用这个模型，并记住到下次切换。',
+    onPick: () => render(),
+    onManage: () => openConfig(),
+  })
 }
 
 function render() {
@@ -104,9 +147,14 @@ function render() {
     rootEl.appendChild(
       h('div', { class: 'scroll' }, [
         h('div', { class: 'card' }, [
-          h('h2', { text: '先配置模型' }),
-          h('p', { class: 'muted', text: '填一个 OpenAI 兼容接口就能直接对话：请求由手机自己发出，不需要电脑。密钥只存在这台手机上。' }),
-          h('button', { class: 'btn primary block', type: 'button', text: '配置接口', onclick: openConfig }),
+          h('h2', { text: '先选择模型' }),
+          h('p', {
+            class: 'muted',
+            text: '可以用 x-hub 内置模型（登录账号后走平台额度），也可以接入任意 OpenAI 兼容接口。请求由手机直接发出，不经过电脑；密钥只存在这台手机上。',
+          }),
+          c.blocked ? h('p', { class: 'muted mdl-warn-text', text: '当前模型不可用：' + c.blocked }) : null,
+          h('button', { class: 'btn primary block', type: 'button', text: '选择模型', onclick: pickModel }),
+          h('button', { class: 'btn block', type: 'button', text: '管理 / 添加自备模型', onclick: openConfig }),
           // 即使换了模型 / 清了 Key，历史对话也必须还能翻出来看
           h('button', { class: 'btn block hist-open', type: 'button', text: '查看历史对话（' + sessions.length + '）', onclick: openHistory }),
         ]),
@@ -114,18 +162,33 @@ function render() {
           h('h2', { text: '能做什么' }),
           h('p', { class: 'muted', text: '配好之后可以直接说「明天下午三点提醒我交房租」「把要交房租那条标成紧急」，助手会真的把待办建好 / 改好。' }),
         ]),
-        h('div', { class: 'card' }, [
-          h('h2', { text: '也可以不填 Key' }),
-          h('p', { class: 'muted', text: '登录 x-hub 账号后可开启平台免费额度，走官方中转，同样不依赖电脑。' }),
-        ]),
       ])
     )
     return
   }
 
+  if (c.fallbackText && fallbackNoted !== c.fallbackText) {
+    fallbackNoted = c.fallbackText
+    setTimeout(() => toast(c.fallbackText), 60)
+  }
+
   rootEl.appendChild(
     h('div', { class: 'chat-tools' }, [
-      h('span', { class: 'chat-model', text: (c.platform ? '平台 · ' : '') + c.model }),
+      h(
+        'button',
+        {
+          class: 'chat-model cm-btn',
+          type: 'button',
+          id: 'btn-chat-model',
+          title: c.fallbackText || '切换模型',
+          onclick: pickModel,
+        },
+        [
+          h('i', { class: 'cm-dot', 'data-kind': c.platform ? 'platform' : 'custom' }),
+          h('span', { class: 'cm-name', text: c.profile.label }),
+          h('i', { class: 'cm-tag', text: c.platform ? '平台' : '自备' }),
+        ]
+      ),
       h('button', { class: 'mini', type: 'button', id: 'btn-chat-history', text: '历史 ' + sessions.length, 'aria-label': '历史对话', onclick: openHistory }),
       h('button', { class: 'mini', type: 'button', text: '⚙', 'aria-label': '设置', onclick: openConfig }),
       h('button', { class: 'mini', type: 'button', id: 'btn-new-chat', text: '+ 新对话', onclick: newChat }),
@@ -239,13 +302,10 @@ function newChat() {
 
 async function send(text) {
   if (sending) return
-  const c = cfg()
-  if (c.platform && !isPlatformLogin()) {
-    toast('平台额度需要登录，请到「我的 → 账号」登录')
-    return
-  }
-  if (!c.platform && !c.apiKey) {
-    toast('先配置 API Key')
+  let c = cfg()
+  if (!c.profile) {
+    toast(c.blocked || '还没有可用模型，先选一个')
+    openConfig()
     return
   }
 
@@ -281,29 +341,41 @@ async function send(text) {
   abortCtl = new AbortController()
   const t0 = Date.now()
 
+  const runOpts = (cc) => ({
+    url: endpoint(cc.baseURL),
+    apiKey: cc.apiKey,
+    model: cc.model,
+    temperature: cc.temperature,
+    messages: apiMessages,
+    signal: abortCtl.signal,
+    onDelta: (piece) => {
+      ai.content += piece
+      paintText()
+    },
+    onTool: (name, summary, ok) => {
+      ai.tools.push({ name, summary, ok })
+      paintTools()
+    },
+    onUsage: (u) => {
+      lastUsage = u
+      lastElapsed = Date.now() - t0
+      paintStats()
+    },
+    confirmDelete: (t) => confirmAsync('AI 要删除待办「' + t.title + '」，删除后不可恢复。', '删除'),
+  })
+
   try {
-    await runAgent({
-      url: endpoint(c.baseURL),
-      apiKey: c.apiKey,
-      model: c.model,
-      temperature: c.temperature,
-      messages: apiMessages,
-      signal: abortCtl.signal,
-      onDelta: (piece) => {
-        ai.content += piece
-        paintText()
-      },
-      onTool: (name, summary, ok) => {
-        ai.tools.push({ name, summary, ok })
-        paintTools()
-      },
-      onUsage: (u) => {
-        lastUsage = u
-        lastElapsed = Date.now() - t0
-        paintStats()
-      },
-      confirmDelete: (t) => confirmAsync('AI 要删除待办「' + t.title + '」，删除后不可恢复。', '删除'),
-    })
+    try {
+      await runAgent(runOpts(c))
+    } catch (e) {
+      // 平台后台下架模型时是 400 model_not_allowed：对账后换当前模型重试一次。
+      // 已经有正文就不重试（流到一半重来会重复输出），如实报错。
+      const next = ai.content || ai.tools.length ? null : await recoverModel(c.profile, e)
+      if (!next) throw e
+      toast('原模型「' + c.profile.label + '」不可用，已改用「' + next.label + '」重试')
+      c = cfgFor(next)
+      await runAgent(runOpts(c))
+    }
     if (!ai.content && !ai.tools.length) ai.content = '（没有返回内容）'
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -550,8 +622,13 @@ async function deleteSessions(ids) {
 
 // ---------------------------------------------------------------- 配置面板
 
-function openConfig() {
-  const c = cfg()
+/**
+ * 模型设置：列表本身就是选择器。
+ * - 点一行即切换（写 aiSelected + 旧键），不需要再点保存；
+ * - 自备模型可增删改，平台模型由服务端清单决定（只读，可刷新）；
+ * - 底部「保存并关闭」只负责系统提示词，避免「换了模型却忘了保存」。
+ */
+export function openConfig() {
   const sheet = document.getElementById('sheet')
   const mask = document.getElementById('sheet-mask')
   const body = document.getElementById('sheet-body')
@@ -559,25 +636,26 @@ function openConfig() {
   document.getElementById('btn-delete').hidden = true
 
   const st = {
-    platform: c.platform,
-    baseURL: c.baseURL,
-    model: c.model,
-    apiKey: S.meta.aiKey || '',
-    system: S.meta.aiSystem || '',
-    guideUrl: '',
-    note: '',
-    providerName: '',
+    sys: S.meta.aiSystem || '',
+    adding: false,
+    editingId: '',
+    busy: false,
+    loadingPlatform: false,
+    platformMsg: '',
+    form: blankForm(),
     testing: false,
     testMsg: '',
     testOk: null,
   }
-  if (!st.platform) {
-    const hit = PRESET_FALLBACK.find((p) => p.baseUrl === (S.meta.aiBase || ''))
-    if (hit) {
-      st.guideUrl = hit.keyGuideUrl
-      st.note = hit.note
-      st.providerName = hit.name
-    }
+
+  function blankForm() {
+    return { label: '', base: '', model: '', key: '', guideUrl: '', note: '', providerName: '' }
+  }
+
+  function resetTest() {
+    st.testing = false
+    st.testMsg = ''
+    st.testOk = null
   }
 
   function setTest(ok, msg) {
@@ -590,125 +668,231 @@ function openConfig() {
     }
   }
 
+  function section(title, action) {
+    return h('div', { class: 'mdl-sect' }, [h('b', { text: title }), action || null])
+  }
+
+  function field(label, type, value, oninput, placeholder) {
+    return h('label', { class: 'field' }, [
+      h('span', { text: label }),
+      h('input', {
+        class: 'input',
+        type,
+        placeholder: placeholder || '',
+        value: value || '',
+        oninput: (e) => oninput(e.target.value),
+      }),
+    ])
+  }
+
+  function modelRow(p, loggedIn, curId, editable) {
+    const a = availability(p, { loggedIn })
+    const on = p.id === curId
+    const main = h('span', { class: 'mdl-main' }, [
+      h('span', { class: 'mdl-t' }, [
+        h('b', { text: p.label }),
+        on ? h('i', { class: 'mdl-badge', text: '使用中' }) : null,
+        a.ok ? null : h('i', { class: 'mdl-bad', text: a.text }),
+      ]),
+      h('span', { class: 'mdl-s', text: modelSubtitle(p) }),
+    ])
+    const row = h(
+      'div',
+      {
+        class: 'mdl-row' + (on ? ' on' : '') + (a.ok ? '' : ' off'),
+        role: 'button',
+        'data-id': p.id,
+        onclick: () => useModel(p),
+      },
+      [h('span', { class: 'mdl-dot' }), main]
+    )
+    if (!editable) return row
+    row.appendChild(
+      h('button', {
+        class: 'mini',
+        type: 'button',
+        text: '编辑',
+        onclick: (e) => {
+          e.stopPropagation()
+          startEdit(p)
+        },
+      })
+    )
+    row.appendChild(
+      h('button', {
+        class: 'mini danger',
+        type: 'button',
+        text: '删除',
+        onclick: (e) => {
+          e.stopPropagation()
+          del(p)
+        },
+      })
+    )
+    return row
+  }
+
   function draw() {
     body.innerHTML = ''
+    const r = currentModel()
+    const profiles = loadProfiles()
+    const loggedIn = isPlatformLogin()
+    const curId = r.profile ? r.profile.id : ''
 
+    // ---------- 当前 ----------
     body.appendChild(
-      h('div', { class: 'switch-row' }, [
-        h('div', { class: 'switch-meta' }, [
-          h('div', { class: 'switch-title', text: '使用 x-hub 平台免费额度' }),
-          h('div', { class: 'switch-sub', text: isPlatformLogin() ? '用账号登录态，无需填 Key' : '需先到「我的 → 账号」登录' }),
+      h('div', { class: 'mdl-current' }, [
+        h('span', { class: 'mdl-main' }, [
+          h('span', { class: 'mdl-t' }, [
+            h('b', { text: r.profile ? r.profile.label : '未选择模型' }),
+            h('i', {
+              class: 'mdl-badge',
+              text: r.profile ? (r.profile.kind === 'platform' ? '平台' : '自备') : '不可用',
+            }),
+          ]),
+          h('span', { class: 'mdl-s', text: r.profile ? modelSubtitle(r.profile) : r.text }),
         ]),
-        h('label', { class: 'toggle' }, [
-          h('input', {
-            type: 'checkbox',
-            checked: st.platform,
-            onchange: (e) => {
-              st.platform = e.target.checked
-              st.testMsg = ''
-              st.testOk = null
-              draw()
-            },
-          }),
-          h('span', { class: 'knob' }),
-        ]),
+        h('button', { class: 'mini', type: 'button', text: '选择', onclick: openPickerHere }),
       ])
     )
+    if (r.fallbackFrom) body.appendChild(h('p', { class: 'mdl-tip bad', text: r.text }))
 
-    if (st.platform) {
-      if (!isPlatformLogin()) {
-        body.appendChild(h('p', { class: 'field-note', text: '尚未登录。请先到「我的 → 账号与邀请码」登录，再回来开启。' }))
-      } else {
-        body.appendChild(h('label', { class: 'field' }, [h('span', { text: '平台模型' }), platformModelSelect()]))
-        body.appendChild(h('p', { class: 'field-note', text: '平台额度走 x-hub 官方中转，公网直连、不经过你的电脑。' }))
-      }
-    } else {
-      const chips = h('div', { class: 'preset-chips' })
-      PRESET_FALLBACK.forEach((p) => {
-        chips.appendChild(
-          h('button', {
-            class: 'preset-chip' + (st.baseURL === p.baseUrl ? ' on' : ''),
-            type: 'button',
-            text: p.name,
-            onclick: () => {
-              st.baseURL = p.baseUrl
-              st.guideUrl = p.keyGuideUrl
-              st.note = p.note
-              st.providerName = p.name
-              st.testMsg = ''
-              st.testOk = null
-              draw()
-            },
-          })
-        )
-      })
-      body.appendChild(h('div', { class: 'field' }, [h('span', { text: '快速填充' }), chips]))
-
-      body.appendChild(
-        h('label', { class: 'field' }, [
-          h('span', { text: '接口地址' }),
-          h('input', {
-            class: 'input',
-            type: 'text',
-            placeholder: 'https://api.deepseek.com/v1',
-            value: st.baseURL,
-            oninput: (e) => (st.baseURL = e.target.value.trim()),
-          }),
-        ])
+    // ---------- x-hub 内置 ----------
+    body.appendChild(
+      section(
+        'x-hub 内置模型',
+        loggedIn
+          ? h('button', {
+              class: 'mini',
+              type: 'button',
+              text: st.loadingPlatform ? '刷新中…' : '刷新',
+              disabled: st.loadingPlatform,
+              onclick: refreshPlatform,
+            })
+          : null
       )
+    )
+    if (!loggedIn) {
+      body.appendChild(h('p', { class: 'field-note', text: '登录 x-hub 账号后自动获取平台模型：走平台额度、公网直连，不需要填 Key。' }))
       body.appendChild(
-        h('label', { class: 'field' }, [
-          h('span', { text: '模型名' }),
-          h('input', {
-            class: 'input',
-            type: 'text',
-            placeholder: 'deepseek-chat',
-            value: st.model,
-            oninput: (e) => (st.model = e.target.value.trim()),
-          }),
-        ])
-      )
-      body.appendChild(
-        h('label', { class: 'field' }, [
-          h('span', { text: 'API Key' }),
-          h('input', {
-            class: 'input',
-            type: 'password',
-            placeholder: 'sk-…',
-            value: st.apiKey,
-            oninput: (e) => (st.apiKey = e.target.value.trim()),
-          }),
-        ])
-      )
-      if (st.guideUrl) {
-        const link = h('a', {
-          class: 'field-link',
-          href: st.guideUrl,
-          onclick: (e) => {
-            e.preventDefault()
-            openExternal(st.guideUrl).catch(() => toast('无法打开浏览器，请手动复制链接'))
+        h('button', {
+          class: 'btn block',
+          type: 'button',
+          text: '去登录账号',
+          onclick: () => {
+            closeSheet()
+            location.hash = '#/account'
           },
         })
-        link.innerHTML = EXT_ICON
-        link.appendChild(document.createTextNode('获取 ' + (st.providerName || '该平台') + ' API Key'))
-        body.appendChild(link)
+      )
+    } else {
+      const pl = profiles.filter((p) => p.kind === 'platform')
+      if (!pl.length) {
+        body.appendChild(
+          h('p', {
+            class: 'field-note',
+            text: st.loadingPlatform ? '正在获取平台模型…' : st.platformMsg || '还没有获取到平台模型，点右上角刷新重试。',
+          })
+        )
+      } else {
+        const list = h('div', { class: 'mdl-list' })
+        pl.forEach((p) => list.appendChild(modelRow(p, loggedIn, curId, false)))
+        body.appendChild(list)
+        if (st.platformMsg) body.appendChild(h('p', { class: 'field-note', text: st.platformMsg }))
       }
-      if (st.note) body.appendChild(h('p', { class: 'field-note', text: st.note }))
     }
 
+    // ---------- 自备 ----------
+    body.appendChild(
+      section(
+        '自备模型',
+        h('button', {
+          class: 'mini',
+          type: 'button',
+          text: st.adding ? '收起' : '＋ 添加',
+          onclick: () => {
+            if (st.adding) {
+              st.adding = false
+              st.editingId = ''
+              st.form = blankForm()
+              resetTest()
+            } else {
+              startAdd()
+              return
+            }
+            draw()
+          },
+        })
+      )
+    )
+    const cu = profiles.filter((p) => p.kind === KIND_CUSTOM)
+    if (!cu.length && !st.adding) {
+      body.appendChild(h('p', { class: 'field-note', text: '还没有自备模型。支持 DeepSeek、OpenAI、阿里云百炼、Ollama 等任意 OpenAI 兼容接口。' }))
+    }
+    cu.forEach((p) => body.appendChild(modelRow(p, loggedIn, curId, true)))
+    if (st.adding) body.appendChild(customForm())
+
+    // ---------- 系统提示词 ----------
     body.appendChild(
       h('label', { class: 'field' }, [
         h('span', { text: '系统提示词' }),
         h('textarea', {
           rows: 3,
           placeholder: '可选：追加到内置助手设定之后',
-          value: st.system,
-          oninput: (e) => (st.system = e.target.value),
+          value: st.sys,
+          oninput: (e) => (st.sys = e.target.value),
         }),
       ])
     )
-
     body.appendChild(
+      h('p', {
+        class: 'field-note',
+        text: '模型选择即时保存并全局生效（AI 助手 + 课表 AI 识别），重启后保留；系统提示词点右下角「保存并关闭」生效。',
+      })
+    )
+  }
+
+  function customForm() {
+    const f = st.form
+    const wrap = h('div', { class: 'mdl-form' })
+    const chips = h('div', { class: 'preset-chips' })
+    PRESET_FALLBACK.forEach((p) => {
+      chips.appendChild(
+        h('button', {
+          class: 'preset-chip' + (f.base === p.baseUrl ? ' on' : ''),
+          type: 'button',
+          text: p.name,
+          onclick: () => {
+            f.base = p.baseUrl
+            f.guideUrl = p.keyGuideUrl
+            f.note = p.note
+            f.providerName = p.name
+            resetTest()
+            draw()
+          },
+        })
+      )
+    })
+    wrap.appendChild(h('div', { class: 'field' }, [h('span', { text: '快速填充' }), chips]))
+    wrap.appendChild(field('名称（可选）', 'text', f.label, (v) => (f.label = v), '例如 DeepSeek'))
+    wrap.appendChild(field('接口地址', 'text', f.base, (v) => (f.base = v.trim()), 'https://api.deepseek.com/v1'))
+    wrap.appendChild(field('模型名', 'text', f.model, (v) => (f.model = v.trim()), 'deepseek-chat'))
+    wrap.appendChild(field('API Key', 'password', f.key, (v) => (f.key = v.trim()), 'sk-…'))
+    if (f.guideUrl) {
+      const link = h('a', {
+        class: 'field-link',
+        href: f.guideUrl,
+        onclick: (e) => {
+          e.preventDefault()
+          openExternal(f.guideUrl).catch(() => toast('无法打开浏览器，请手动复制链接'))
+        },
+      })
+      link.innerHTML = EXT_ICON
+      link.appendChild(document.createTextNode('获取 ' + (f.providerName || '该平台') + ' API Key'))
+      wrap.appendChild(link)
+    }
+    if (f.note) wrap.appendChild(h('p', { class: 'field-note', text: f.note }))
+    wrap.appendChild(
       h('div', { class: 'row-btns' }, [
         h('button', {
           class: 'btn',
@@ -721,54 +905,158 @@ function openConfig() {
         h('button', { class: 'btn', type: 'button', id: 'btn-models', text: '获取模型', onclick: runFetchModels }),
       ])
     )
-    body.appendChild(
+    wrap.appendChild(
       h('p', {
         id: 'test-result',
         class: 'test-result' + (st.testOk == null ? '' : st.testOk ? ' ok' : ' bad'),
         text: st.testMsg,
       })
     )
+    wrap.appendChild(
+      h('div', { class: 'row-btns' }, [
+        h('button', {
+          class: 'btn',
+          type: 'button',
+          text: '取消',
+          onclick: () => {
+            st.adding = false
+            st.editingId = ''
+            st.form = blankForm()
+            resetTest()
+            draw()
+          },
+        }),
+        h('button', {
+          class: 'btn primary',
+          type: 'button',
+          id: 'btn-save-model',
+          text: st.busy ? '保存中…' : '保存模型',
+          disabled: st.busy,
+          onclick: saveCustom,
+        }),
+      ])
+    )
+    return wrap
   }
 
-  function platformModelSelect() {
-    const sel = h('select', { class: 'input' })
-    const cur = S.meta.aiModel || ''
-    if (cur && st.platform) sel.appendChild(h('option', { value: cur, text: cur }))
-    platformModels()
-      .then((r) => {
-        const models = Array.isArray(r.models) ? r.models : []
-        if (!models.length) {
-          if (!cur) sel.appendChild(h('option', { value: '', text: '平台暂无可选模型' }))
-          return
-        }
-        sel.innerHTML = ''
-        models.forEach((m) => sel.appendChild(h('option', { value: m, text: m })))
-        if (cur && models.includes(cur)) sel.value = cur
-        else {
-          st.model = models[0]
-          sel.value = models[0]
-        }
-      })
-      .catch(() => {
-        if (!cur) sel.appendChild(h('option', { value: '', text: '拉取失败，稍后重试' }))
-      })
-    sel.onchange = () => (st.model = sel.value)
-    return sel
+  function openPickerHere() {
+    openModelPicker({
+      title: '选择模型',
+      onPick: () => {
+        draw()
+        render()
+      },
+      onManage: () => {
+        st.adding = true
+        st.editingId = ''
+        st.form = blankForm()
+        draw()
+      },
+    })
   }
 
-  function draft() {
-    return {
-      base: st.platform ? PLATFORM_URL + '/v1' : st.baseURL,
-      key: st.platform ? ptToken() : st.apiKey,
-      model: st.model,
+  async function useModel(p) {
+    if (p.id === (currentModel().profile || {}).id) return
+    try {
+      await selectModel(p.id)
+      toast('已切换到「' + p.label + '」')
+      draw()
+      render()
+    } catch (e) {
+      toast('切换失败：' + ((e && e.message) || e))
     }
   }
 
+  async function refreshPlatform() {
+    if (st.loadingPlatform) return
+    st.loadingPlatform = true
+    st.platformMsg = ''
+    draw()
+    const r = await syncPlatformModels()
+    st.loadingPlatform = false
+    if (!r.ok) {
+      st.platformMsg =
+        r.code === 'no-login'
+          ? '需要先登录账号'
+          : r.code === 'empty'
+          ? '平台暂未返回模型，稍后再试'
+          : '获取失败，检查网络后重试'
+    } else if (r.switched) {
+      st.platformMsg = '原模型已下架，已切换到「' + r.switched.label + '」'
+      toast(st.platformMsg)
+    }
+    draw()
+    render()
+  }
+
+  function startAdd() {
+    st.adding = true
+    st.editingId = ''
+    st.form = blankForm()
+    resetTest()
+    draw()
+  }
+
+  function startEdit(p) {
+    st.adding = true
+    st.editingId = p.id
+    const hit = PRESET_FALLBACK.filter((x) => x.baseUrl === p.base)[0]
+    st.form = {
+      label: p.label,
+      base: p.base,
+      model: p.model,
+      key: p.key,
+      guideUrl: hit ? hit.keyGuideUrl : '',
+      note: hit ? hit.note : '',
+      providerName: hit ? hit.name : '',
+    }
+    resetTest()
+    draw()
+  }
+
+  async function del(p) {
+    if (!(await confirmAsync('删除模型「' + p.label + '」？', '删除'))) return
+    const next = await removeModel(p.id)
+    toast(next ? '已删除，当前模型：' + next.label : '已删除')
+    draw()
+    render()
+  }
+
+  async function saveCustom() {
+    const f = st.form
+    if (!f.base || !f.model) return toast('接口地址和模型名都要填')
+    st.busy = true
+    draw()
+    try {
+      if (st.editingId) {
+        await updateCustomModel(st.editingId, {
+          label: f.label,
+          base: f.base,
+          model: f.model,
+          key: f.key,
+        })
+        toast('已保存并切换到「' + (f.label || f.model) + '」')
+      } else {
+        const r = await addCustomModel({ label: f.label, base: f.base, model: f.model, key: f.key })
+        toast(r.existing ? '已存在同款模型，已更新 Key 并切换' : '已添加并切换到「' + r.profile.label + '」')
+      }
+      st.adding = false
+      st.editingId = ''
+      st.form = blankForm()
+      resetTest()
+    } catch (e) {
+      toast('保存失败：' + ((e && e.message) || e))
+    }
+    st.busy = false
+    draw()
+    render()
+  }
+
   async function runTest() {
-    const d = draft()
-    if (!d.base) return toast('先填接口地址')
-    if (!d.key) return toast(st.platform ? '先登录账号' : '先填 API Key')
-    if (!d.model) return toast('先填模型名')
+    const f = st.form
+    if (!f.base) return toast('先填接口地址')
+    if (!f.key) return toast('先填 API Key')
+    if (!f.model) return toast('先填模型名')
 
     st.testing = true
     const btn = document.getElementById('btn-test')
@@ -781,10 +1069,10 @@ function openConfig() {
 
     try {
       const text = await requestText({
-        url: endpoint(d.base),
-        headers: { Authorization: 'Bearer ' + d.key },
+        url: endpoint(f.base),
+        headers: { Authorization: 'Bearer ' + f.key },
         body: JSON.stringify({
-          model: d.model,
+          model: f.model,
           messages: [{ role: 'user', content: 'ping' }],
           max_tokens: 1,
           stream: false,
@@ -802,9 +1090,9 @@ function openConfig() {
         /* 有些服务返回空体，仍算通过 */
       }
       const ms = Date.now() - t0
-      setTest(ok, ok ? '连通正常 · ' + d.model + ' · ' + ms + ' ms' : '连通失败：' + hint)
+      setTest(ok, ok ? '连通正常 · ' + f.model + ' · ' + ms + ' ms' : '连通失败：' + hint)
     } catch (e) {
-      setTest(false, '连通失败：' + (e.message || e))
+      setTest(false, '连通失败：' + ((e && e.message) || e))
     } finally {
       st.testing = false
       const b2 = document.getElementById('btn-test')
@@ -816,9 +1104,9 @@ function openConfig() {
   }
 
   async function runFetchModels() {
-    const d = draft()
-    if (!d.base) return toast('先填接口地址')
-    if (!d.key) return toast(st.platform ? '先登录账号' : '先填 API Key')
+    const f = st.form
+    if (!f.base) return toast('先填接口地址')
+    if (!f.key) return toast('先填 API Key')
 
     const btn = document.getElementById('btn-models')
     if (btn) {
@@ -828,8 +1116,8 @@ function openConfig() {
     try {
       const text = await requestText({
         method: 'GET',
-        url: String(d.base).replace(/\/+$/, '') + '/models',
-        headers: { Authorization: 'Bearer ' + d.key },
+        url: String(f.base).replace(/\/+$/, '') + '/models',
+        headers: { Authorization: 'Bearer ' + f.key },
       })
       const list = parseModels(text)
       if (!list.length) {
@@ -837,14 +1125,14 @@ function openConfig() {
         setTest(false, '获取模型失败：返回里没有 data[].id')
         return
       }
-      openPicker('选择模型（' + list.length + '）', list, st.model, (pick) => {
-        st.model = pick
+      openPicker('选择模型（' + list.length + '）', list, f.model, (pick) => {
+        f.model = pick
         draw()
         setTest(true, '已选模型：' + pick)
       })
     } catch (e) {
-      toast('获取模型失败：' + (e.message || e))
-      setTest(false, '获取模型失败：' + (e.message || e))
+      toast('获取模型失败：' + ((e && e.message) || e))
+      setTest(false, '获取模型失败：' + ((e && e.message) || e))
     } finally {
       const b2 = document.getElementById('btn-models')
       if (b2) {
@@ -855,25 +1143,12 @@ function openConfig() {
   }
 
   draw()
+  // 登录状态下静默对账：服务端下架的模型在这里就消失，不用等用户选中撞 400
+  if (isPlatformLogin()) refreshPlatform()
 
+  document.getElementById('btn-save').textContent = '保存并关闭'
   document.getElementById('btn-save').onclick = async () => {
-    const baseURL = String(st.baseURL || '').trim()
-    const model = String(st.model || '').trim()
-    if (st.platform) {
-      if (!isPlatformLogin()) return toast('请先登录账号')
-      if (!model) return toast('请选择平台模型')
-      await saveMeta('aiPlatform', '1')
-      await saveMeta('aiModel', model)
-      await saveMeta('aiBase', '')
-      await saveMeta('aiKey', '')
-    } else {
-      if (!baseURL || !model) return toast('接口地址和模型名都要填')
-      await saveMeta('aiPlatform', '')
-      await saveMeta('aiBase', baseURL)
-      await saveMeta('aiModel', model)
-      await saveMeta('aiKey', String(st.apiKey || '').trim())
-    }
-    await saveMeta('aiSystem', String(st.system || '').trim())
+    await saveMeta('aiSystem', String(st.sys || '').trim())
     closeSheet()
     toast('已保存')
     render()
@@ -885,10 +1160,10 @@ function openConfig() {
   // 「清空对话」改成「删除当前对话」：语义与历史列表的单条删除一致，
   // 不再出现「清空了但历史里还留着一条空壳」的两套说法
   if (activeId) {
-    const del = document.getElementById('btn-delete')
-    del.hidden = false
-    del.textContent = '删除当前对话'
-    del.onclick = async () => {
+    const delBtn = document.getElementById('btn-delete')
+    delBtn.hidden = false
+    delBtn.textContent = '删除当前对话'
+    delBtn.onclick = async () => {
       closeSheet()
       await deleteSessions([activeId])
     }

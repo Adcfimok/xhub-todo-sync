@@ -166,7 +166,7 @@ final class AppCatalog {
     private static void ensureIcon(PackageManager pm, String pkg, File target) {
         if (target.exists() && target.length() > 0) return;
         Bitmap bm = null;
-        FileOutputStream fos = null;
+        File tmp = null;
         try {
             Drawable d = pm.getApplicationIcon(pkg);
             if (d == null) return;
@@ -176,13 +176,42 @@ final class AppCatalog {
             d.draw(c);
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             bm.compress(Bitmap.CompressFormat.PNG, 100, bos);
-            fos = new FileOutputStream(target);
-            fos.write(bos.toByteArray());
+            byte[] png = bos.toByteArray();
+            // 先写「独一无二的临时文件」再原子改名：AssetServer 是并发读这些文件的，
+            // 直接写目标文件会让同一时刻的 /__appicon/ 请求读到写了一半的 PNG（前端图标破损）。
+            // 临时名带线程 id，避免并发的两次导出互相覆盖同一个 .tmp。
+            File dir = target.getParentFile();
+            tmp = new File(dir, target.getName() + "." + Thread.currentThread().getId() + ".tmp");
+            FileOutputStream fos = new FileOutputStream(tmp);
+            try {
+                fos.write(png);
+                fos.flush();
+            } finally {
+                try {
+                    fos.close();
+                } catch (Throwable ignore) {
+                }
+            }
+            if (!tmp.renameTo(target)) {
+                // 个别文件系统不允许覆盖式 rename：退化成直接写，至少内容完整
+                FileOutputStream f2 = new FileOutputStream(target);
+                try {
+                    f2.write(png);
+                } finally {
+                    try {
+                        f2.close();
+                    } catch (Throwable ignore) {
+                    }
+                }
+            }
         } catch (Throwable ignore) {
             // 个别应用取不到图标：前端会用 appIconFor 再试一次，仍失败才显示文字兜底
         } finally {
-            if (fos != null) {
-                try { fos.close(); } catch (Throwable ignore) {}
+            if (tmp != null) {
+                try {
+                    if (tmp.exists()) tmp.delete();
+                } catch (Throwable ignore) {
+                }
             }
             if (bm != null) bm.recycle();
         }

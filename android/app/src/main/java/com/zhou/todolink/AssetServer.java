@@ -126,11 +126,26 @@ final class AssetServer implements Runnable {
     @Override
     public void run() {
         while (running) {
+            Socket s = null;
             try {
-                final Socket s = server.accept();
-                pool.submit(() -> handle(s));
+                s = server.accept();
+                final Socket sock = s;
+                pool.submit(() -> handle(sock));
+                s = null;   // 已交给线程池，由 handle 负责关闭
             } catch (IOException e) {
                 if (running) Log.w(TAG, "accept failed: " + e.getMessage());
+            } catch (RuntimeException e) {
+                // stop() 之后线程池已 shutdown，此时 submit 会抛 RejectedExecutionException。
+                // 不接住的话整个 accept 线程会带着一个没关的 socket 一起死掉；
+                // 这里吞掉并关掉 socket，让循环回到 while(running) 正常退出。
+                if (running) Log.w(TAG, "dispatch failed: " + e.getMessage());
+            } finally {
+                if (s != null) {
+                    try {
+                        s.close();
+                    } catch (IOException ignored) {
+                    }
+                }
             }
         }
     }

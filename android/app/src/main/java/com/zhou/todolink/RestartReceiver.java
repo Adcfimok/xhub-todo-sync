@@ -33,12 +33,26 @@ public class RestartReceiver extends BroadcastReceiver {
                 || Intent.ACTION_TIMEZONE_CHANGED.equals(action);
         if (!rearm) return;
 
-        Context ctx = context.getApplicationContext();
-        try {
-            Reminders.ensureChannels(ctx);
-            Reminders.rearmAfterRestart(ctx);
-        } catch (Throwable ignore) {
-            // 重排失败不该让广播崩掉
-        }
+        final Context ctx = context.getApplicationContext();
+
+        // 重排要读计划、写 SharedPreferences、再下发最多 8 个闹钟，全是同步 IO。
+        // 开机那一刻主线程本来就拥挤，在广播里直接做容易被判 ANR；
+        // goAsync() 把这段挪到工作线程，跑完再 finish，系统会保证进程活到那时。
+        final PendingResult pr = goAsync();
+        new Thread(() -> {
+            try {
+                Reminders.ensureChannels(ctx);
+                Reminders.rearmAfterRestart(ctx);
+            } catch (Throwable ignore) {
+                // 重排失败不该让进程崩掉；用户下次打开 App 时 setPlan 会再排一次
+            } finally {
+                if (pr != null) {
+                    try {
+                        pr.finish();
+                    } catch (Throwable ignore) {
+                    }
+                }
+            }
+        }, "xhub-rearm").start();
     }
 }

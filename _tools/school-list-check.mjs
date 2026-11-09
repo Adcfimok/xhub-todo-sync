@@ -52,7 +52,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/i.test(m.text())) errors.push(m.text()) })
   await page.addInitScript(() => {
     window.Android = {
-      originPort: () => 47830, appVersion: () => '3.7.0', deviceName: () => 'test',
+      originPort: () => 47830, appVersion: () => '3.8.0', deviceName: () => 'test',
       readClipboard: () => '', writeClipboard: () => {}, vibrate: () => {}, toast: () => {}, openUrl: () => {},
     }
   })

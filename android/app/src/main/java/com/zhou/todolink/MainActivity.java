@@ -27,6 +27,7 @@ import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -138,12 +139,39 @@ public class MainActivity extends Activity {
                 String url = request.getUrl().toString();
                 return !url.startsWith("http://127.0.0.1:");
             }
+
+            /**
+             * 渲染进程被系统回收（内存压力 / 渲染器崩溃）时必须自己接住。
+             * 不重写这个方法，系统会把整个 App 进程一起杀掉 —— 用户看到的就是「用着用着闪退」。
+             * 返回 true 表示已自行处理，WebView 此后不可再用，只能退出重进。
+             */
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                if (webView == view) webView = null;
+                try {
+                    if (rootLayout != null) rootLayout.removeView(view);
+                    view.destroy();
+                } catch (Throwable ignore) {
+                }
+                Toast.makeText(MainActivity.this, "页面渲染进程被系统回收，请重新打开应用", Toast.LENGTH_LONG).show();
+                finish();
+                return true;
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> {
+                    // 上一个请求还没答复就被新的覆盖，WebView 会一直挂着一个未决的授权请求
+                    // （页面侧 getUserMedia 永远不 resolve）。先明确拒掉旧的再处理新的。
+                    if (pendingPermission != null) {
+                        try {
+                            pendingPermission.deny();
+                        } catch (Throwable ignore) {
+                        }
+                        pendingPermission = null;
+                    }
                     boolean wantsVideo = false;
                     for (String r : request.getResources()) {
                         if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) wantsVideo = true;
@@ -428,6 +456,29 @@ public class MainActivity extends Activity {
         bridge.emit("pick", o);
     }
 
+    /**
+     * 息屏 / 切走前把提醒计划钉进系统。
+     *
+     * 原来只靠页面的 visibilitychange：WebView 在「按电源键息屏」时并不保证收到它
+     * （窗口对 WindowManager 仍然可见），而 onChange 的 2.5 秒防抖在页面被冻结后
+     * 也不会再执行 —— 最后改的那条提醒就永远没排进 AlarmManager，锁屏后自然不响。
+     * onPause 是息屏和切后台都必然经过的同步点，在这里补一次 flush。
+     */
+    @Override
+    protected void onPause() {
+        flushAlarms();
+        super.onPause();
+    }
+
+    private void flushAlarms() {
+        if (webView == null) return;
+        try {
+            webView.evaluateJavascript(
+                    "(function(){try{window.__flushAlarms&&window.__flushAlarms()}catch(e){}})()", null);
+        } catch (Throwable ignore) {
+        }
+    }
+
     @Override
     public void onBackPressed() {
         // 教务浏览器在最上层：返回键先回退网页，退到头了再关掉这层，不退出 App
@@ -456,10 +507,23 @@ public class MainActivity extends Activity {
         if (bridge != null) bridge.shutdown();
         if (server != null) server.stop();
         if (webView != null) {
-            webView.loadUrl("about:blank");
-            webView.destroy();
+            // 顺序很重要：WebView 还挂在 View 树里就 destroy()，
+            // 它持有的 Activity / 渲染进程引用不会释放，是这类外壳 App 最常见的内存泄漏。
+            try {
+                webView.loadUrl("about:blank");
+            } catch (Throwable ignore) {
+            }
+            try {
+                if (rootLayout != null) rootLayout.removeView(webView);
+            } catch (Throwable ignore) {
+            }
+            try {
+                webView.destroy();
+            } catch (Throwable ignore) {
+            }
             webView = null;
         }
+        rootLayout = null;
         super.onDestroy();
     }
 
@@ -471,6 +535,8 @@ public class MainActivity extends Activity {
         private final boolean originSwitched;
         private final ExecutorService pool = Executors.newCachedThreadPool();
         private final Map<String, HttpURLConnection> live = new ConcurrentHashMap<>();
+        /** Activity 销毁后置位：之后任何回调都不该再往已销毁的 WebView 里塞 JS */
+        private volatile boolean closed = false;
 
         Bridge(Context ctx, WebView webView, int originPort, boolean originSwitched) {
             this.ctx = ctx;
@@ -495,6 +561,7 @@ public class MainActivity extends Activity {
         }
 
         void shutdown() {
+            closed = true;
             for (HttpURLConnection c : live.values()) {
                 try {
                     c.disconnect();
@@ -512,9 +579,12 @@ public class MainActivity extends Activity {
          * 不再把多段用户数据直接拼进 JS 源码——那是最容易被构造出越界语法的写法。
          */
         void emit(String fn, JSONObject payload) {
+            if (closed) return;
             final String json = payload == null ? "{}" : payload.toString();
             final String js = "try{window.__nativeEmit(" + q(fn) + "," + q(json) + ")}catch(e){}";
             webView.post(() -> {
+                // post 是异步的：排队期间 Activity 可能已经销毁，落地前再判一次
+                if (closed) return;
                 try {
                     webView.evaluateJavascript(js, null);
                 } catch (Throwable ignore) {
@@ -573,6 +643,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void httpStream(final String reqId, final String method, final String url,
                                final String headersJson, final String body) {
+            if (closed) return;
             pool.execute(() -> {
                 HttpURLConnection c = null;
                 try {
@@ -581,6 +652,10 @@ public class MainActivity extends Activity {
                     c.setConnectTimeout(20000);
                     c.setReadTimeout(180000);
                     c.setRequestProperty("Accept", "text/event-stream, application/json");
+                    // 先登记再写请求体：写 body 也可能耗时很久（大 prompt）。
+                    // 之前是写完才登记，这期间用户点「停止」找不到连接，abort 变成空操作，
+                    // 线程会继续跑完整条请求 —— 既没真停，也白占一个线程和连接。
+                    live.put(reqId, c);
 
                     if (headersJson != null && !headersJson.isEmpty()) {
                         JSONObject h = new JSONObject(headersJson);
@@ -591,12 +666,23 @@ public class MainActivity extends Activity {
                     }
                     if (body != null && !body.isEmpty()) {
                         c.setDoOutput(true);
-                        c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                        // 调用方显式给了 Content-Type 就尊重它（setRequestProperty 会覆盖同名值）
+                        if (c.getRequestProperty("Content-Type") == null) {
+                            c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                        }
                         c.getOutputStream().write(body.getBytes("UTF-8"));
                     }
 
-                    live.put(reqId, c);
                     int code = c.getResponseCode();
+                    if (code >= 300 && code < 400) {
+                        // HttpURLConnection 只在同协议内自动跟随重定向；走到这里说明
+                        // 协议/主机变了（典型：http 地址 302 到 https）。当成成功返回会把
+                        // 重定向页的 HTML 正文喂给上层，解析失败还查不出原因。
+                        String loc = c.getHeaderField("Location");
+                        emit("error", payload(reqId, "code", code,
+                                "body", "请求被重定向到 " + (loc == null ? "未知地址" : loc) + "，请把地址直接改成最终地址"));
+                        return;
+                    }
                     if (code >= 400) {
                         String text = readAll(c.getErrorStream());
                         emit("error", payload(reqId, "code", code, "body", text));
@@ -647,7 +733,11 @@ public class MainActivity extends Activity {
         public void notify(final String title, final String body) {
             ((Activity) ctx).runOnUiThread(() -> {
                 try {
-                    Reminders.notify(ctx, title, body, "notify-" + (System.currentTimeMillis() & 0xffff), false);
+                    // 用标题派生稳定的通知键：同一条待办再次提醒时是「替换」而不是新增。
+                    // 之前拼的是 System.currentTimeMillis()&0xffff，每弹一次就是一条新通知，
+                    // 一天下来通知栏能堆十几条同一条待办的提醒。
+                    String key = "notify-" + (title == null ? "" : title.hashCode());
+                    Reminders.notify(ctx, title, body, key, false);
                 } catch (Throwable e) {
                     Toast.makeText(ctx, "通知发送失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -814,6 +904,12 @@ public class MainActivity extends Activity {
             final MainActivity act = (MainActivity) ctx;
             act.runOnUiThread(() -> {
                 try {
+                    // 系统选择器一次只能开一个：上一次还没回来就又发起请求会覆盖 pickReqId，
+                    // 前一个 Promise 就永远等不到回调（页面表现为选完文件后一直转圈）。
+                    if (act.pickReqId != null) {
+                        emit("pick", payload(reqId, "ok", false, "error", "已经有一个文件选择正在进行"));
+                        return;
+                    }
                     act.pickReqId = reqId;
                     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -821,6 +917,8 @@ public class MainActivity extends Activity {
                     i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
                     act.startActivityForResult(i, REQ_PICK_FILE);
                 } catch (Throwable e) {
+                    // 没起来就不能留着 reqId：否则下一次选择的结果会串到这个已经失败的请求上
+                    act.pickReqId = null;
                     emit("pick", payload(reqId, "ok", false, "error", "打不开文件选择器：" + e.getMessage()));
                 }
             });

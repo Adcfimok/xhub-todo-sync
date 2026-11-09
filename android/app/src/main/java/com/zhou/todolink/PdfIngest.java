@@ -41,6 +41,14 @@ final class PdfIngest {
     private static final long MAX_BYTES = 24L * 1024 * 1024;
     /** 渲染宽度上限（px）；A4 在 scale=2 下约 1190px，够看清 8pt 小字 */
     private static final int MAX_WIDTH = 1600;
+    /**
+     * 单页总像素上限（约 4MP，A4@2x 约 2MP，留一倍余量）。
+     * 只限宽度不够：扫描长图那种「极窄但极长」的页面宽度轻松达标，
+     * 高度却没有上界，一次 createBitmap 就是上百 MB，必然 OOM。
+     */
+    private static final long MAX_PIXELS = 4L * 1000 * 1000;
+    /** 所有解压流的内存预算：流全解压后可能是原文件的数倍，不限总量时大文件能把进程撑爆 */
+    private static final long MAX_STREAM_BYTES = 64L * 1024 * 1024;
 
     private PdfIngest() {}
 
@@ -61,9 +69,13 @@ final class PdfIngest {
             o.put("pages", pages);
             if (pages > 0) {
                 PdfRenderer.Page p = r.openPage(0);
-                o.put("width", p.getWidth());
-                o.put("height", p.getHeight());
-                p.close();
+                // 放 finally：getWidth/getHeight 抛异常时这里不关，PdfRenderer 就再也关不掉
+                try {
+                    o.put("width", p.getWidth());
+                    o.put("height", p.getHeight());
+                } finally {
+                    p.close();
+                }
             }
             o.put("maxPages", MAX_PAGES);
         } catch (SecurityException e) {
@@ -125,7 +137,9 @@ final class PdfIngest {
             }
             File dir = pageDir(ctx);
             if (!dir.exists()) dir.mkdirs();
-            String name = fileName(uri, page, scale);
+            // 缓存键必须带文件大小：同一个 SAF uri 覆盖成新内容后 uri 不变，
+            // 只按 uri 哈希会一直复用上一份文件的渲染图，导入出错课表也看不出来。
+            String name = fileName(uri, page, scale, pfd.getStatSize());
             File f = new File(dir, name);
             int w = 0;
             int h = 0;
@@ -138,6 +152,12 @@ final class PdfIngest {
                     if (w > MAX_WIDTH) {
                         double k = (double) MAX_WIDTH / w;
                         w = MAX_WIDTH;
+                        h = Math.max(1, (int) Math.round(h * k));
+                    }
+                    long px = (long) w * h;
+                    if (px > MAX_PIXELS) {
+                        double k = Math.sqrt((double) MAX_PIXELS / px);
+                        w = Math.max(1, (int) Math.round(w * k));
                         h = Math.max(1, (int) Math.round(h * k));
                     }
                     Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
@@ -247,23 +267,28 @@ final class PdfIngest {
 
     private static boolean isPdf(byte[] b) {
         if (b == null || b.length < 5) return false;
-        // 规范允许文件头前有少量垃圾字节，前 1KB 内出现 %PDF- 即可
-        int lim = Math.min(1024, b.length - 4);
+        // 规范允许文件头前有少量垃圾字节，前 1KB 内出现 %PDF- 即可。
+        // 上界必须留出 5 个字节的探测窗口：写成 b.length-4 时最后一个偏移会读到
+        // b[b.length]，对 5~1028 字节的小文件直接抛 ArrayIndexOutOfBounds。
+        int lim = Math.min(1024, b.length - 5);
         for (int i = 0; i <= lim; i++) {
             if (b[i] == '%' && b[i + 1] == 'P' && b[i + 2] == 'D' && b[i + 3] == 'F' && b[i + 4] == '-') return true;
         }
         return false;
     }
 
-    private static String fileName(String uri, int page, double scale) {
+    private static String fileName(String uri, int page, double scale, long size) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] d = md.digest((uri + "|" + Math.round((scale <= 0 ? 2 : scale) * 100)).getBytes("UTF-8"));
+            // 用「夹到有效区间后的 scale」参与哈希：scale=5 与 scale=3 渲染结果相同，
+            // 按原始值哈希会为同一张图存两份，还会让缓存永远对不上。
+            double s = Math.min(3, Math.max(1, scale <= 0 ? 2 : scale));
+            byte[] d = md.digest((uri + "|" + size + "|" + Math.round(s * 100)).getBytes("UTF-8"));
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 8; i++) sb.append(String.format("%02x", d[i] & 0xff));
             return sb + "_p" + page + ".jpg";
         } catch (Throwable e) {
-            return String.format("%016x", (uri + "#" + page).hashCode()) + "_p" + page + ".jpg";
+            return String.format("%016x", (uri + "#" + page + "#" + size).hashCode()) + "_p" + page + ".jpg";
         }
     }
 
@@ -352,6 +377,7 @@ final class PdfIngest {
         /** 扫 stream...endstream；只保留体积合理的流，防止把图片流也解压一遍 */
         private List<byte[]> streams() {
             List<byte[]> list = new ArrayList<>();
+            long budget = MAX_STREAM_BYTES;
             int i = 0;
             while (true) {
                 int s = indexOf(buf, "stream", i);
@@ -370,8 +396,16 @@ final class PdfIngest {
                 byte[] slice = new byte[len];
                 System.arraycopy(buf, start, slice, 0, len);
                 byte[] plain = inflate(slice);
-                if (plain != null && plain.length > 0) list.add(plain);
-                else if (len > 64) list.add(slice);
+                byte[] use = null;
+                if (plain != null && plain.length > 0) use = plain;
+                else if (len > 64) use = slice;      // 没压缩过的内容流，原样保留
+                if (use == null) continue;
+                // 超出预算的流跳过但不中止：文本内容流通常很小，
+                // 而内嵌大图往往排在它前面。这里 break 会让「图在前、文本在后」的
+                // PDF 整份丢文本，所以只跳过这一条，继续找后面的小流。
+                if (use.length > budget) continue;
+                budget -= use.length;
+                list.add(use);
             }
             return list;
         }
@@ -682,7 +716,9 @@ final class PdfIngest {
         java.util.zip.Inflater inf = new java.util.zip.Inflater(raw);
         try {
             inf.setInput(data);
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(256, data.length * 3));
+            // 初始容量别按「原大小 ×3」预留：8MB 的流会一次性申请 24MB，
+            // 多来几条就在解压前先把内存顶爆。小容量起步，靠 BAOS 自己倍增。
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.min(Math.max(256, data.length), 64 * 1024));
             byte[] buf = new byte[16384];
             int guard = 0;
             while (!inf.finished() && guard++ < 4096) {

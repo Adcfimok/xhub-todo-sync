@@ -48,6 +48,11 @@ final class FileTransfer {
 
     static final int CHUNK = 2 * 1024 * 1024;
     private static final int MAX_ATTEMPTS = 5;
+    /** 单块响应体的上限：一块 = CHUNK 明文 + 16B GCM tag，再留点余量。
+     *  不设上限时，代理/错误页返回一个 200 的超大响应就会把 ByteArrayOutputStream 撑爆 */
+    private static final int MAX_CHUNK_BYTES = CHUNK + 64 * 1024;
+    /** 普通 JSON 响应体的上限（offer / status / finish），足够放下任何正常回包 */
+    private static final int MAX_JSON_BYTES = 4 * 1024 * 1024;
     private static final ExecutorService POOL = Executors.newCachedThreadPool();
     /** reqId → 已取消。只增不减会漏内存，任务结束时统一 remove */
     private static final Map<String, Boolean> CANCEL = new ConcurrentHashMap<>();
@@ -201,16 +206,24 @@ final class FileTransfer {
                     throw new IOException("校验失败，文件可能在传输中被改动");
                 }
                 String savedTo = publish(ctx, part, name, mimeOf(name));
-                JSONObject fin = new JSONObject();
-                fin.put("id", fileId);
-                fin.put("sha256", got);
-                postJson(host, "/api/v1/files/pull/finish", token, fin.toString());
+                // 文件此刻已经落到用户手机上了。后面「通知电脑端收尾」只是告知动作，
+                // 失败也不能把结果改判成 error —— 否则用户以为没下成功，又去重下一次。
+                String warn = "";
+                try {
+                    JSONObject fin = new JSONObject();
+                    fin.put("id", fileId);
+                    fin.put("sha256", got);
+                    postJson(host, "/api/v1/files/pull/finish", token, fin.toString());
+                } catch (Exception e) {
+                    warn = "文件已保存，但通知电脑端完成时失败：" + msgOf(e);
+                }
 
                 JSONObject done = base(reqId, name, size, "done", size);
                 done.put("fileId", fileId);
                 done.put("pct", 100);
                 done.put("savedTo", savedTo);
                 done.put("sha256", got);
+                if (!warn.isEmpty()) put(done, "warn", warn);
                 sink.emit(done);
             } catch (Cancelled e) {
                 sink.emit(base(reqId, name, size, "canceled", 0));
@@ -383,7 +396,7 @@ final class FileTransfer {
             c = openConn(host, path, token, "GET");
             int code = c.getResponseCode();
             InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
-            byte[] all = readBytes(is);
+            byte[] all = readBytes(is, code >= 400 ? MAX_JSON_BYTES : MAX_CHUNK_BYTES);
             if (code >= 400) throw new HttpError(code, new String(all, "UTF-8"));
             return all;
         } finally {
@@ -453,17 +466,28 @@ final class FileTransfer {
             v.put(MediaStore.MediaColumns.IS_PENDING, 1);
             Uri item = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
             if (item == null) throw new IOException("无法写入系统下载目录");
-            InputStream in = new FileInputStream(part);
-            OutputStream out = r.openOutputStream(item);
             try {
-                copy(in, out);
-            } finally {
-                closeQuietly(in);
-                closeQuietly(out);
+                InputStream in = new FileInputStream(part);
+                OutputStream out = r.openOutputStream(item);
+                if (out == null) throw new IOException("无法写入系统下载目录");
+                try {
+                    copy(in, out);
+                } finally {
+                    closeQuietly(in);
+                    closeQuietly(out);
+                }
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                r.update(item, done, null, null);
+            } catch (Exception e) {
+                // 写一半失败时必须删掉这条 PENDING 记录：IS_PENDING=1 的行在「下载」里
+                // 永远不可见，也不会被系统清理，会在媒体库里长期堆积成 0 字节垃圾。
+                try {
+                    r.delete(item, null, null);
+                } catch (Throwable ignore) {
+                }
+                throw e;
             }
-            ContentValues done = new ContentValues();
-            done.put(MediaStore.MediaColumns.IS_PENDING, 0);
-            r.update(item, done, null, null);
             part.delete();
             return "下载/x-hub/" + name;
         }
@@ -562,15 +586,20 @@ final class FileTransfer {
     }
 
     private static String readAll(InputStream is) throws IOException {
-        return new String(readBytes(is), "UTF-8");
+        return new String(readBytes(is, MAX_JSON_BYTES), "UTF-8");
     }
 
-    private static byte[] readBytes(InputStream is) throws IOException {
+    private static byte[] readBytes(InputStream is, int limit) throws IOException {
         if (is == null) return new byte[0];
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(16 * 1024);
         byte[] buf = new byte[16 * 1024];
         int n;
-        while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+        while ((n = is.read(buf)) > 0) {
+            bos.write(buf, 0, n);
+            if (bos.size() > limit) {
+                throw new IOException("响应体超过预期大小（可能是错误页或代理拦截）");
+            }
+        }
         return bos.toByteArray();
     }
 

@@ -17,7 +17,16 @@ import {
 } from '../lib/native.js'
 import { EDU_PRESETS, parseEduText, mergeTimetable } from '../lib/edu.js'
 import { SCHOOLS, SCHOOL_SOURCE } from '../lib/schools.js'
-import { PLATFORM_URL, isPlatformLogin, ptToken } from '../lib/platform.js'
+import { isPlatformLogin } from '../lib/platform.js'
+import { openModelPicker } from '../lib/modelpicker.js'
+import {
+  availability,
+  currentModel,
+  modelBase,
+  modelEndpoint,
+  modelKey,
+  recoverModel,
+} from '../lib/aimodels.js'
 import {
   MAX_AI_PAGES,
   buildRequestBody,
@@ -401,32 +410,68 @@ const AI_TEXT_MIN_QUALITY = 0.6
 const AI_TEXT_MIN_CHARS = 40
 const AI_TEXT_MIN_CJK = 8
 
-function aiCfg() {
-  const platform = S.meta.aiPlatform === '1'
-  return {
-    platform,
-    baseURL: platform ? PLATFORM_URL + '/v1' : S.meta.aiBase || '',
-    apiKey: platform ? ptToken() : S.meta.aiKey || '',
-    model: S.meta.aiModel || '',
-  }
+function aiCfg(profile) {
+  const p = profile || currentModel().profile
+  if (!p) return null
+  return { profile: p, baseURL: modelBase(p), apiKey: modelKey(p), model: p.model }
 }
 
-/** 配置不全时返回一句人话，页面据此给出「去配置」入口 */
-function aiBlockedReason() {
-  const c = aiCfg()
-  if (c.platform && !isPlatformLogin()) return '平台额度需要登录：我的 → 账号'
-  if (!c.platform && !c.apiKey) return '还没配置 AI 接口：AI 助手 → 设置 → 填一个 OpenAI 兼容接口'
-  if (!c.platform && !c.baseURL) return '还没填接口地址：AI 助手 → 设置'
-  if (!c.model) return '还没选模型：AI 助手 → 设置'
-  return ''
+/** 配置不全时返回一句人话，页面据此给出「去配置 / 去登录」入口 */
+function aiBlockedReason(profile) {
+  const p = profile || currentModel().profile
+  if (!p) return '还没有可用模型：AI 助手 →「选择模型」里添加自备模型，或登录 x-hub 账号用内置模型'
+  const a = availability(p, { loggedIn: isPlatformLogin() })
+  if (a.ok) return ''
+  if (a.code === 'no-login') return '所选模型「' + p.label + '」需要登录 x-hub 账号：我的 → 账号'
+  return '所选模型「' + p.label + '」不可用：' + a.text + '（AI 助手 → 模型设置）'
 }
 
 function aiEndpoint(base) {
   return String(base || '').replace(/\/+$/, '') + '/chat/completions'
 }
 
+/** 识别前先选模型：确认后才继续，取消则整条流程原地退出 */
+function chooseAiModel(title, hint) {
+  return new Promise((resolve) => {
+    openModelPicker({
+      title,
+      hint,
+      onPick: (p) => resolve(p),
+      onCancel: () => resolve(null),
+      onManage: () => {
+        location.hash = '#/ai'
+      },
+    })
+  })
+}
+
+/**
+ * 发一次识别请求；平台模型撞上「已下架」时对账并换当前模型重试一次。
+ * 返回 {raw, profile}，让进度与报错能点名实际使用的模型。
+ */
+async function aiPost(cfg, makeBody, signal) {
+  const send = (c) =>
+    requestText({
+      method: 'POST',
+      url: aiEndpoint(c.baseURL),
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
+      body: makeBody(c),
+      signal,
+    })
+  try {
+    return { raw: await send(cfg), profile: cfg.profile }
+  } catch (e) {
+    const next = await recoverModel(cfg.profile, e)
+    if (!next) throw e
+    toast('原模型「' + cfg.profile.label + '」不可用，已改用「' + next.label + '」重试')
+    const c2 = aiCfg(next)
+    return { raw: await send(c2), profile: next }
+  }
+}
+
 /** 配置缺失时的引导卡片：不静默失败，也不把用户丢在原地 */
 function showAiConfigHint(msg) {
+  const needLogin = !isPlatformLogin()
   const mask = openMask(
     h('div', { class: 'lib-card' }, [
       h('div', { class: 'lib-head' }, [
@@ -440,10 +485,10 @@ function showAiConfigHint(msg) {
         h('button', {
           class: 'btn primary',
           type: 'button',
-          text: '去配置',
+          text: needLogin ? '去登录' : '去配置',
           onclick: () => {
             mask.remove()
-            location.hash = '#/ai'
+            location.hash = needLogin ? '#/account' : '#/ai'
           },
         }),
       ]),
@@ -452,7 +497,7 @@ function showAiConfigHint(msg) {
 }
 
 /** 识别过程的进度卡片：只更新一行字和一条进度，不做花哨动画 */
-function showAiProgress(title) {
+function showAiProgress(title, modelLabel) {
   const line = h('p', { class: 'lib-hint', text: '准备中…' })
   const bar = h('i')
   const mask = openMask(
@@ -461,6 +506,7 @@ function showAiProgress(title) {
         h('b', { text: title }),
         h('button', { class: 'mini', type: 'button', text: '取消', onclick: () => cancel() }),
       ]),
+      modelLabel ? h('p', { class: 'lib-hint mdl-prog', text: '模型：' + modelLabel }) : null,
       line,
       h('div', { class: 'ai-progress' }, [bar]),
     ])
@@ -500,12 +546,17 @@ function showAiProgress(title) {
 
 /** 选 PDF → 判断走文本还是图片 → 调模型 → 解析 → 预览 */
 async function importFromPdf() {
-  const blocked = aiBlockedReason()
-  if (blocked) return showAiConfigHint(blocked)
   if (!hasPdfIngest()) {
     toast('这版 APK 没有内置 PDF 解析，请先用「粘贴文字让 AI 识别」或升级 App')
     return
   }
+  // 完全没有可用模型时直接给引导卡，不把用户丢进一个选不了东西的弹层
+  if (!currentModel().profile) return showAiConfigHint(aiBlockedReason())
+  // 需求要求：真正开始识别前先让用户确认用哪个模型
+  const profile = await chooseAiModel('选择识别模型', 'PDF 课表识别会用它来读课程；与 AI 助手共用，切换后立即生效。')
+  if (!profile) return
+  const blocked = aiBlockedReason(profile)
+  if (blocked) return showAiConfigHint(blocked)
   let file
   try {
     file = await pickPdf()
@@ -517,7 +568,7 @@ async function importFromPdf() {
   if (!info.ok) return toast(info.error || '打不开这个 PDF')
   if (!info.pages) return toast('这份 PDF 没有可读取的页面')
 
-  const prog = showAiProgress('AI 正在识别课表')
+  const prog = showAiProgress('AI 正在识别课表', profile.label)
   let mode = 'text'
   try {
     const pages = Math.min(info.pages, MAX_AI_PAGES)
@@ -546,17 +597,11 @@ async function importFromPdf() {
     }
 
     if (prog.aborted) return
-    const c = aiCfg()
+    const c = aiCfg(profile)
     const ctrl = new AbortController()
     prog.bindAbort(() => ctrl.abort())
     prog.step(mode === 'vision' ? '模型正在看图识别（可能需要十几秒）…' : '模型正在识别文本…', 0.8)
-    const raw = await requestText({
-      method: 'POST',
-      url: aiEndpoint(c.baseURL),
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
-      body: buildRequestBody(Object.assign({ model: c.model }, payload)),
-      signal: ctrl.signal,
-    })
+    const { raw } = await aiPost(c, (cc) => buildRequestBody(Object.assign({ model: cc.model }, payload)), ctrl.signal)
     if (prog.aborted) return
     prog.step('解析识别结果…', 0.95)
     const obj = extractJson(extractContent(raw))
@@ -582,8 +627,7 @@ async function importFromPdf() {
 
 /** 没有 PDF 时的等价入口：粘贴文字，走同一条识别与校正链路 */
 function importFromAiText() {
-  const blocked = aiBlockedReason()
-  if (blocked) return showAiConfigHint(blocked)
+  if (!currentModel().profile) return showAiConfigHint(aiBlockedReason())
   const input = h('textarea', { class: 'input', rows: 8, placeholder: '把课表里的文字粘进来（保留换行，表格一行一行粘即可）' })
   const mask = openMask(
     h('div', { class: 'lib-card' }, [
@@ -600,28 +644,31 @@ function importFromAiText() {
         onclick: async () => {
           const text = input.value.trim()
           if (text.length < 10) return toast('内容太短，先粘贴课表文字')
+          // 真正发请求前先确认模型；取消就留在粘贴框，不丢已输入的内容
+          const profile = await chooseAiModel('选择识别模型', '粘贴的文字会发给这个模型解析；与 AI 助手共用，切换后立即生效。')
+          if (!profile) return
+          const blocked = aiBlockedReason(profile)
+          if (blocked) return showAiConfigHint(blocked)
           mask.remove()
-          await runAiOnText(text)
+          await runAiOnText(text, profile)
         },
       }),
     ])
   )
 }
 
-async function runAiOnText(text) {
-  const prog = showAiProgress('AI 正在识别课表')
+async function runAiOnText(text, profile) {
+  const prog = showAiProgress('AI 正在识别课表', profile.label)
   try {
-    const c = aiCfg()
+    const c = aiCfg(profile)
     const ctrl = new AbortController()
     prog.bindAbort(() => ctrl.abort())
     prog.step('正在请求模型…', 0.4)
-    const raw = await requestText({
-      method: 'POST',
-      url: aiEndpoint(c.baseURL),
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.apiKey },
-      body: buildRequestBody({ mode: 'text', model: c.model, text, meta: { fileName: '粘贴的文字' } }),
-      signal: ctrl.signal,
-    })
+    const { raw } = await aiPost(
+      c,
+      (cc) => buildRequestBody({ mode: 'text', model: cc.model, text, meta: { fileName: '粘贴的文字' } }),
+      ctrl.signal
+    )
     if (prog.aborted) return
     prog.step('解析识别结果…', 0.95)
     const obj = extractJson(extractContent(raw))
@@ -649,8 +696,18 @@ function showAiFail(title, detail, mode) {
         class: 'lib-hint',
         text:
           mode === 'vision'
-            ? '如果模型不支持图片，可以：① 换用带视觉的模型；② 用电脑打开 PDF 复制文字后用「粘贴文字让 AI 识别」；③ 用「教务系统一键导入」。'
-            : '可以检查接口地址/模型名是否正确，或改用「教务系统一键导入」；识别结果不会写入课表。',
+            ? '如果模型不支持图片，可以：① 换用带视觉的模型（点下方「换一个模型再试」）；② 用电脑打开 PDF 复制文字后用「粘贴文字让 AI 识别」；③ 用「教务系统一键导入」。'
+            : '可以换一个模型再试，或检查接口地址 / 模型名是否正确；也可以改用「教务系统一键导入」。识别结果不会写入课表。',
+      }),
+      h('button', {
+        class: 'btn block',
+        type: 'button',
+        text: '换一个模型再试',
+        onclick: async () => {
+          mask.remove()
+          const p = await chooseAiModel('选择识别模型', '换一个模型后，请重新发起识别。')
+          if (p) toast('已切换到「' + p.label + '」，请重新识别')
+        },
       }),
     ])
   )

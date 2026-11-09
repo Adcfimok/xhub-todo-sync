@@ -46,7 +46,15 @@ public class KeepAliveService extends Service {
         try {
             startForeground(NOTIF_ID, buildNotification());
         } catch (Throwable e) {
-            // 极端情况下前台服务启动失败，退化为普通服务，不强求
+            // 前台服务没起来就必须立刻停掉自己：startForegroundService() 之后
+            // 5 秒内没有真正 startForeground()，系统会直接判定 App 异常并杀掉进程
+            // （日志里是 "did not then call Service.startForeground()"）。
+            // 退化成普通服务继续挂着只会换来一次崩溃，不如干净退出。
+            try {
+                stopSelf();
+            } catch (Throwable ignore) {
+            }
+            return START_NOT_STICKY;
         }
         return START_STICKY;
     }

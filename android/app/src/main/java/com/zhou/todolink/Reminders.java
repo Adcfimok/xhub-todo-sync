@@ -12,6 +12,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,6 +22,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 提醒的「系统侧」实现：通知渠道 + 精确闹钟 + 提醒计划持久化。
@@ -100,9 +102,22 @@ final class Reminders {
      * 接收 JS 下发的完整提醒计划（不只是最近几条）。
      * json: [{at: 毫秒, title, body, tag}]，tag 是去重键（todo-<id> / pomo / selftest）。
      */
-    static void setPlan(Context ctx, String json) {
+    static synchronized void setPlan(Context ctx, String json) {
         List<Item> items = parse(json);
         SharedPreferences p = sp(ctx);
+        // 自检提醒（testIn）只存在于原生计划里，JS 的计划里没有它。
+        // 不做接力的话：用户点「通知自检」后，只要期间发生任何一次 scheduleAlarms
+        // （改一条待办、切后台再回来），这条自检就被整份计划替换掉了，
+        // 用户等了一分钟没等到，只会认为「通知坏了」。
+        long now = System.currentTimeMillis();
+        Set<String> has = new HashSet<>();
+        for (Item it : items) has.add(it.tag);
+        for (Item old : parse(p.getString(K_PLAN, "[]"))) {
+            if (old.at > now && "selftest".equals(old.tag) && !has.contains(old.tag)) items.add(old);
+        }
+        Collections.sort(items, BY_AT);
+        if (items.size() > MAX_PLAN) items = new ArrayList<>(items.subList(0, MAX_PLAN));
+
         String text = toJson(items);
         if (armedThisProcess && text.equals(p.getString(K_PLAN, null))) {
             // 计划没变就别重排：编辑待办时 onChange 会反复触发，
@@ -115,7 +130,7 @@ final class Reminders {
     }
 
     /** 清空计划（用户关掉提醒开关时） */
-    static void clearPlan(Context ctx) {
+    static synchronized void clearPlan(Context ctx) {
         sp(ctx).edit().putString(K_PLAN, "[]").commit();
         cancelAll(ctx);
     }
@@ -124,15 +139,19 @@ final class Reminders {
      * 闹钟到点后调用：记录事件 → 从计划里摘掉这条 → 补排下一条。
      * 这是「App 没打开也能持续收到提醒」的关键：补排发生在广播里，不依赖 WebView。
      */
-    static void onFired(Context ctx, String tag, long at) {
+    static synchronized void onFired(Context ctx, String tag, long at) {
         long now = System.currentTimeMillis();
         SharedPreferences p = sp(ctx);
-        addEvent(ctx, tag, at, now, false);
+        // at <= 0 说明这条闹钟是旧版本 APK 排下的（当时的 Intent 里没带 at）。
+        // 这种事件对不上任何计划条目，写进事件表只会污染 JS 的对账；通知已经发出去了，
+        // 这里只更新时间水位，绝不去动计划表 —— 否则会按 tag 误删一条无关的提醒。
+        if (at > 0) addEvent(ctx, tag, at, now, false);
         p.edit()
                 .putLong(K_LAST_AT, at)
                 .putLong(K_LAST_FIRE, now)
                 .putLong(K_LAST_DELAY, at <= 0 ? 0 : now - at)
                 .commit();
+        if (at <= 0) return;
 
         List<Item> items = drop(parse(p.getString(K_PLAN, "[]")), tag, at);
         p.edit().putString(K_PLAN, toJson(items)).commit();
@@ -143,7 +162,7 @@ final class Reminders {
      * 开机 / 应用更新后重新排闹钟。
      * 系统重启会清掉所有 AlarmManager 条目，不重排的话用户从此收不到任何提醒。
      */
-    static void rearmAfterRestart(Context ctx) {
+    static synchronized void rearmAfterRestart(Context ctx) {
         SharedPreferences p = sp(ctx);
         long now = System.currentTimeMillis();
         List<Item> keep = new ArrayList<>();
@@ -160,7 +179,7 @@ final class Reminders {
     }
 
     /** 取走「App 没开时响过 / 错过」的事件（取走即清空），供 JS 对账去重 */
-    static String takeEvents(Context ctx) {
+    static synchronized String takeEvents(Context ctx) {
         SharedPreferences p = sp(ctx);
         String s = p.getString(K_EVENT, "[]");
         if (s == null || s.isEmpty()) s = "[]";
@@ -169,9 +188,15 @@ final class Reminders {
     }
 
     /** 自检：安排一条 N 秒后的提醒，走的是和真实提醒完全相同的通路 */
-    static void testIn(Context ctx, int seconds) {
+    static synchronized void testIn(Context ctx, int seconds) {
         int sec = Math.max(1, Math.min(300, seconds));
-        List<Item> items = drop(parse(sp(ctx).getString(K_PLAN, "[]")), "selftest", 0);
+        // 直接按 tag 滤掉旧的自检条目。原来用 drop(plan, "selftest", 0)，
+        // 但 drop 的回退分支要求 it.at <= at（0），永远不成立 ——
+        // 连点两次自检会留下两条，旧的那条 at 已过，会被立刻补排并在 1 秒后误响一次。
+        List<Item> items = new ArrayList<>();
+        for (Item old : parse(sp(ctx).getString(K_PLAN, "[]"))) {
+            if (!"selftest".equals(old.tag)) items.add(old);
+        }
         Item it = new Item();
         it.at = System.currentTimeMillis() + sec * 1000L;
         it.tag = "selftest";
@@ -185,25 +210,72 @@ final class Reminders {
 
     // ------------------------------------------------------------ 排闹钟
 
-    private static void armAll(Context ctx, List<Item> items) {
+    /**
+     * 槽位 → 当前排在系统里的条目键（tag|at），null 表示该槽空闲。
+     *
+     * 为什么需要它：老实现每次排闹钟先 cancelAll 再全量重排。只要有任意一条提醒到点，
+     * AlarmReceiver 就会重排一次，于是「同一时刻的另一条提醒」被撤销后又在 now+1000 重新排进去；
+     * 那条提醒的广播此刻多半已经在派发队列里，撤不掉 —— 结果是它响两遍（晚 1 秒再来一次）。
+     * 现在改成差量：只撤计划里已经消失的槽、只补还没排上的条目，没变化的槽位一概不碰。
+     */
+    private static final String[] SLOT_KEY = new String[MAX_ALARMS];
+    /** 进程刚起来时系统里可能还留着上个进程排的闹钟，此时 SLOT_KEY 不可信，必须先全撤一次 */
+    private static boolean slotsValid = false;
+
+    private static String keyOf(Item it) {
+        return it.tag + "|" + it.at;
+    }
+
+    private static synchronized void armAll(Context ctx, List<Item> items) {
         AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
         if (am == null) return;
-        cancelAll(ctx);
         long now = System.currentTimeMillis();
-        int slot = 0;
+
+        // 候选：最近的 MAX_ALARMS 条；刚过点的（12h 内）允许补一次
+        List<Item> want = new ArrayList<>();
         for (Item it : items) {
-            if (slot >= MAX_ALARMS) break;
-            long at = it.at;
-            if (at <= now) {
-                if (now - at > KEEP_PAST) continue; // 太旧的直接丢（正常不会走到）
-                at = now + 1000;                    // 刚到点的补一次，别等下次打开 App
+            if (want.size() >= MAX_ALARMS) break;
+            if (it.at > now || now - it.at <= KEEP_PAST) want.add(it);
+        }
+
+        if (!slotsValid) {
+            cancelAll(ctx);   // 不知道系统里还留着什么，全撤（老行为，进程启动时只走一次）
+            slotsValid = true;
+        }
+
+        // 1) 撤掉计划里已经没有的槽位
+        Set<String> wantKeys = new HashSet<>();
+        for (Item it : want) wantKeys.add(keyOf(it));
+        for (int slot = 0; slot < MAX_ALARMS; slot++) {
+            if (SLOT_KEY[slot] == null || wantKeys.contains(SLOT_KEY[slot])) continue;
+            cancelSlot(ctx, am, slot);
+            SLOT_KEY[slot] = null;
+        }
+
+        // 2) 只补还没排上的条目；已在排的槽位原样不动（避免撤掉正在派发的那一条）
+        Set<String> haveKeys = new HashSet<>();
+        for (String k : SLOT_KEY) if (k != null) haveKeys.add(k);
+        for (Item it : want) {
+            String k = keyOf(it);
+            if (!haveKeys.add(k)) continue;
+            int free = -1;
+            for (int slot = 0; slot < MAX_ALARMS; slot++) {
+                if (SLOT_KEY[slot] == null) {
+                    free = slot;
+                    break;
+                }
             }
-            arm(am, at, pending(ctx, slot, it, PendingIntent.FLAG_UPDATE_CURRENT));
-            slot++;
+            if (free < 0) break;
+            long at = it.at > now ? it.at : now + 1000;   // 刚到点的补一次，别等下次打开 App
+            // 排失败就不记账：下次 armAll 会再试。记了账又没排上等于这条提醒永久失踪
+            if (arm(am, at, pending(ctx, free, it, PendingIntent.FLAG_UPDATE_CURRENT))) {
+                SLOT_KEY[free] = k;
+            }
         }
     }
 
-    private static void arm(AlarmManager am, long at, PendingIntent pi) {
+    /** @return 是否真的排进了系统（失败时调用方不应把它记成「已排」） */
+    private static boolean arm(AlarmManager am, long at, PendingIntent pi) {
         boolean exact = exactAllowed(am);
         try {
             if (exact) {
@@ -213,27 +285,36 @@ final class Reminders {
             } else {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
             }
+            return true;
         } catch (SecurityException se) {
             // 权限被收回 / 厂商限制：退化为近似闹钟，宁可晚几分钟也不能不响
             try {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+                return true;
             } catch (Throwable ignore) {
+                return false;
             }
+        } catch (Throwable ignore) {
+            return false;
+        }
+    }
+
+    private static void cancelSlot(Context ctx, AlarmManager am, int slot) {
+        try {
+            PendingIntent pi = pending(ctx, slot, null, PendingIntent.FLAG_UPDATE_CURRENT);
+            am.cancel(pi);
+            pi.cancel();
         } catch (Throwable ignore) {
         }
     }
 
-    private static void cancelAll(Context ctx) {
+    private static synchronized void cancelAll(Context ctx) {
         AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
-        if (am == null) return;
-        for (int slot = 0; slot < MAX_ALARMS; slot++) {
-            try {
-                PendingIntent pi = pending(ctx, slot, null, PendingIntent.FLAG_UPDATE_CURRENT);
-                am.cancel(pi);
-                pi.cancel();
-            } catch (Throwable ignore) {
-            }
+        if (am != null) {
+            for (int slot = 0; slot < MAX_ALARMS; slot++) cancelSlot(ctx, am, slot);
         }
+        for (int i = 0; i < MAX_ALARMS; i++) SLOT_KEY[i] = null;
+        slotsValid = false;
     }
 
     private static PendingIntent pending(Context ctx, int slot, Item it, int extraFlags) {
@@ -398,8 +479,10 @@ final class Reminders {
         int id = tag == null || tag.isEmpty() ? (int) (System.currentTimeMillis() & 0x7fffffff) : tag.hashCode();
         try {
             nm.notify(id, b.build());
-        } catch (Throwable ignore) {
-            // Android 13+ 没给通知权限时会抛 SecurityException，静默失败即可（JS 侧会提示去开权限）
+        } catch (Throwable e) {
+            // Android 13+ 没给通知权限、或渠道被系统判定非法时会抛 SecurityException。
+            // 原来这里完全静默，出问题时既看不到现象也查不到原因，只能靠用户猜。
+            Log.w("Reminders", "notify failed (id=" + id + ", alarm=" + alarm + "): " + e);
         }
     }
 
@@ -439,12 +522,16 @@ final class Reminders {
             return out;
         }
         Collections.sort(raw, BY_AT);
-        for (Item it : raw) {
-            // 同一个 tag 只保留最近的一条：改时间后旧的别再来一次
+        // 同一个 tag 只保留「最新」的一条（at 最大的那条）：改时间后旧的必须作废。
+        // 原来是从小到大取第一条，实际保留的是旧时间、丢掉新时间，和注释的意图正好相反 ——
+        // 表现就是「把提醒改到明天，第二天却没响」。
+        for (int i = raw.size() - 1; i >= 0; i--) {
+            Item it = raw.get(i);
             if (!seen.add(it.tag)) continue;
             out.add(it);
-            if (out.size() >= MAX_PLAN) break;
         }
+        Collections.sort(out, BY_AT);
+        if (out.size() > MAX_PLAN) out = new ArrayList<>(out.subList(0, MAX_PLAN));
         return out;
     }
 
@@ -477,11 +564,13 @@ final class Reminders {
             }
         }
         if (hit < 0) {
+            // 精确匹配不上时，只允许摘「不比这次触发更晚」的同 tag 条目。
+            // 用户刚把提醒改到更晚后，旧闹钟的广播可能还在路上：这时 at 是旧值、
+            // 计划里是新值。无脑按 tag 摘会把刚改好的新提醒删掉 ——
+            // 表现同样是「改完时间就再也不响」。
             for (int i = 0; i < items.size(); i++) {
-                if (t.equals(items.get(i).tag)) {
-                    hit = i;
-                    break;
-                }
+                Item it = items.get(i);
+                if (t.equals(it.tag) && it.at <= at) hit = i;
             }
         }
         List<Item> out = new ArrayList<>(items.size());

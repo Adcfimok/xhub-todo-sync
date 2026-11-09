@@ -1,5 +1,6 @@
 import { boot, S, onChange, saveMeta } from './lib/core.js'
-import { initAlerts } from './lib/alerts.js'
+import { initAlerts, scheduleAlarms } from './lib/alerts.js'
+import { ensureAiStore, maybeSyncPlatformModels } from './lib/aimodels.js'
 import { closeSheet, toast, h } from './lib/ui.js'
 import { normalizeNickname } from './lib/nickname.js'
 import { weekOfTerm, coursesOnDay } from './lib/timetable.js'
@@ -215,7 +216,7 @@ function start() {
   onChange(syncChip)
 
   boot()
-    .then(() => {
+    .then(async () => {
       // 端口变了 = 换了一个空存储分区，明确告诉用户，而不是让它静默「丢数据」
       if (window.Android && typeof window.Android.originChanged === 'function') {
         try {
@@ -225,13 +226,28 @@ function start() {
           /* 老桥没有这两个方法，忽略 */
         }
       }
+      // 旧版 aiPlatform/aiBase/aiKey/aiModel → 模型清单；必须在首屏渲染前完成，
+      // 否则 AI 页 / 课表识别第一次打开会读到空列表
+      try {
+        await ensureAiStore()
+      } catch (e) {
+        /* 迁移失败不阻塞启动，页面会给出空态引导 */
+      }
       settings.applyTheme(S.meta.themeMode, S.meta.accentColor)
       initAlerts()
+      // 原生在 onPause（息屏 / 切后台）时回调这里，把计划钉进系统后再让 WebView 冻结
+      window.__flushAlarms = scheduleAlarms
       restoreKeepAlive()
       syncWidgetData()
       onChange(syncWidgetData)
       render(true)
       syncChip()
+      // 登录状态下静默对账平台模型清单：下架的模型在这里就消失，避免选中后撞 400
+      maybeSyncPlatformModels()
+        .then((r) => {
+          if (r && r.ok && r.switched) toast('原模型已下架，已切换到「' + r.switched.label + '」')
+        })
+        .catch(() => {})
       // 首次启动：没设置过称呼就强制弹窗，填完才放行
       showNicknameGate()
     })

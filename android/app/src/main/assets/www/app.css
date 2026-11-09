@@ -2189,3 +2189,77 @@ select.input { appearance: none; }
 .cd-main { flex: 1; min-width: 0; }
 .cd-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-sub { margin-top: 2px; font-size: 11.5px; color: var(--ink-3); }
+
+/* ---------- 模型选择器 / 模型目录 ---------- */
+.cm-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0; border: 0; background: none; color: var(--ink-2);
+  font-family: inherit; font-size: 11.5px; text-align: left;
+}
+.cm-btn:active { opacity: .7; }
+.cm-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--blue); }
+.cm-dot[data-kind='platform'] { background: var(--accent); }
+.cm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-tag {
+  flex: none; font-style: normal; font-size: 9.5px; padding: 1px 5px;
+  border-radius: 5px; background: var(--well); color: var(--ink-3);
+}
+
+.mdl-card { max-width: 520px; }
+.mdl-sect {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin: 14px 0 7px;
+}
+.mdl-sect > b { font-size: 12.5px; color: var(--ink-2); font-weight: 600; }
+.mdl-list { display: flex; flex-direction: column; gap: 6px; }
+.mdl-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 11px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card); cursor: pointer;
+}
+.mdl-row.on { border-color: var(--accent); background: rgba(139, 139, 255, .12); }
+.mdl-row.off { opacity: .62; }
+.mdl-row:active { transform: scale(.995); }
+.mdl-row .mini { flex: none; }
+.mdl-dot {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 1.5px solid var(--ink-3);
+}
+.mdl-row.on .mdl-dot { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent); }
+.mdl-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mdl-t { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; min-width: 0; }
+.mdl-t > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mdl-s {
+  font-size: 11.5px; color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mdl-badge {
+  flex: none; font-style: normal; font-size: 9.5px; padding: 1px 6px;
+  border-radius: 999px; background: var(--pri-soft); color: var(--orange); font-weight: 600;
+}
+.mdl-bad { flex: none; font-style: normal; font-size: 10px; color: var(--red); }
+.mdl-banner {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 10px;
+  background: var(--pri-soft); color: var(--orange); font-size: 12px; line-height: 1.45;
+}
+.mdl-lock {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border: 1px dashed var(--line); border-radius: 12px;
+}
+.mdl-empty { margin: 4px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+.mdl-tip { margin: 14px 0 8px; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+.mdl-tip.bad { color: var(--red); }
+.mdl-actions { display: flex; gap: 8px; }
+.mdl-actions .btn { flex: 1; }
+.mdl-current {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border-radius: 12px; background: var(--well);
+}
+.mdl-form {
+  margin-top: 8px; padding: 10px 11px 4px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+}
+.mdl-form .field { margin-bottom: 10px; }
+.mdl-prog { margin: -4px 0 6px; }
+.mdl-warn-text { color: var(--orange) !important; }
+.mini.danger { color: var(--red); }

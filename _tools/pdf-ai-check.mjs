@@ -109,7 +109,7 @@ try {
     }
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.7.0',
+      appVersion: () => '3.8.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
@@ -172,6 +172,12 @@ try {
     await page.locator('.act-grid .btn', { hasText: /^导入$/ }).click()
     await page.waitForTimeout(150)
   }
+  /** 新版流程：进 AI 识别先弹模型选择，确认后才选文件 / 发请求 */
+  async function confirmModel() {
+    await page.waitForSelector('.mdl-card', { timeout: 4000 })
+    await page.locator('#mdl-ok').click()
+    await page.waitForTimeout(180)
+  }
   async function closeMasks() {
     await page.evaluate(() => document.querySelectorAll('.lib-mask, .modal-mask, .modal').forEach((m) => m.remove()))
   }
@@ -185,7 +191,7 @@ try {
   await page.waitForTimeout(200)
   const hintText = await page.textContent('.lib-card')
   check('未配置模型时给出明确引导，而不是静默失败', /AI 识别还差一步/.test(hintText) && /AI 助手/.test(hintText))
-  check('引导卡提供「去配置」按钮', (await page.locator('.lib-card .btn', { hasText: '去配置' }).count()) === 1)
+  check('引导卡提供「去配置 / 去登录」按钮', (await page.locator('.lib-card .btn', { hasText: /去配置|去登录/ }).count()) === 1)
   await closeMasks()
 
   // ---------- 2. 文本层识别 ----------
@@ -199,6 +205,13 @@ try {
 
   await openImport()
   await page.locator('.imp-opt', { hasText: 'AI 识别 PDF 课表' }).click()
+  await page.waitForSelector('.mdl-card', { timeout: 4000 })
+  const mdlTitle = await page.textContent('.mdl-card .lib-head b')
+  check('识别前先弹出模型选择，而不是直接发请求', /选择识别模型/.test(mdlTitle), mdlTitle)
+  const mdlText = await page.textContent('.mdl-card')
+  check('选择器点名当前模型与生效范围', /gpt-4o-mini/.test(mdlText) && /立即生效/.test(mdlText))
+  check('确认之前不会发出识别请求', (await page.evaluate(() => window.__reqs.length)) === 0)
+  await page.locator('#mdl-ok').click()
   await page.waitForTimeout(1100) // 选文件 15ms + 请求 30ms + 渲染
   const req = await page.evaluate(() => window.__reqs[0])
   check('按 application/pdf 过滤系统文件选择器', (await page.evaluate(() => window.__pickMime)) === 'application/pdf')
@@ -246,6 +259,7 @@ try {
   await page.evaluate((r) => (window.__pdf.reply = r), VISION_REPLY)
   await openImport()
   await page.locator('.imp-opt', { hasText: 'AI 识别 PDF 课表' }).click()
+  await confirmModel()
   await page.waitForTimeout(1300)
   const vreq = await page.evaluate(() => window.__reqs[0])
   const vcontent = vreq && vreq.body.messages[1].content
@@ -266,6 +280,7 @@ try {
   await page.evaluate(() => (window.__pdf.reply = '抱歉，这张课表太模糊，我无法识别。'))
   await openImport()
   await page.locator('.imp-opt', { hasText: 'AI 识别 PDF 课表' }).click()
+  await confirmModel()
   await page.waitForTimeout(1000)
   const failText = await page.textContent('.lib-card')
   check('模型返回非 JSON 时明确告知，不写入课表', /不是可解析的 JSON/.test(failText))
@@ -276,6 +291,7 @@ try {
   await page.evaluate(() => (window.__pdf.reply = '{"courses":[]}'))
   await openImport()
   await page.locator('.imp-opt', { hasText: 'AI 识别 PDF 课表' }).click()
+  await confirmModel()
   await page.waitForTimeout(1000)
   const emptyText = await page.textContent('.lib-card')
   check('识别到 0 条时提示「没有识别到课程」', /没有识别到课程/.test(emptyText))
@@ -291,6 +307,7 @@ try {
   await page.waitForTimeout(200)
   await page.locator('.lib-card textarea').fill('马克思主义基本原理 周四 第1-2节 1-16周 A305')
   await page.locator('.lib-card .btn.primary', { hasText: '开始识别' }).click()
+  await confirmModel()
   await page.waitForTimeout(900)
   const treq = await page.evaluate(() => window.__reqs[0])
   check('粘贴文字走同一个识别链路', !!treq && /马克思主义基本原理/.test(String(treq.body.messages[1].content)))

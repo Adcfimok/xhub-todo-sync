@@ -80,7 +80,7 @@ function bridge() {
   }
   window.Android = {
     originPort: () => 47830,
-    appVersion: () => '3.7.0',
+    appVersion: () => '3.8.0',
     deviceName: () => 'test',
     readClipboard: () => '',
     writeClipboard: () => {},
@@ -286,6 +286,42 @@ try {
     const map = await readMeta(page, 'notifiedMap')
     check('补发后写入 notifiedMap，不会重复', !!(map && map[Y + '@' + lateAt]))
     check('场景 2 无 JS 报错', errors.length === 0, errors.join(' | '))
+    await ctx.close()
+  }
+
+  // ============================================================ 场景 3：空计划不能当成"取消全部提醒"
+  // 回归：锁屏 / 切后台都会触发 scheduleAlarms()。此时若算出的计划为空，
+  // 老实现调用 cancelAlarms() → 原生 clearPlan() → 把「通知自检」这类原生独有条目
+  // 连同整份计划一起撤掉，于是「点自检 → 锁屏 → 到点什么都不响」。
+  {
+    const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: 'dark' })
+    const page = await ctx.newPage()
+    const errors = []
+    page.on('pageerror', (e) => errors.push(String(e.message || e)))
+    await page.addInitScript(bridge)
+    await page.goto('http://127.0.0.1:' + port + '/index.html', { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(900)
+    await page.waitForFunction(() => typeof window.__flushAlarms === 'function', null, { timeout: 4000 }).catch(() => {})
+
+    check('原生 onPause 的 flush 钩子已挂上', await page.evaluate(() => typeof window.__flushAlarms === 'function'))
+
+    // 没有任何待办 → 计划必然为空；模拟息屏时原生发起的 flush
+    await page.evaluate(() => {
+      window.__calls.length = 0
+      window.__alarms.length = 0
+      window.__flushAlarms()
+    })
+    await page.waitForTimeout(200)
+
+    const calls = await page.evaluate(() => window.__calls)
+    const plans = await page.evaluate(() => window.__alarms)
+    check('空计划不再调用 cancelAlarms（否则会撤掉原生自检提醒）', !calls.includes('cancelAlarms'), calls.join(',') || '(无调用)')
+    check(
+      '空计划改为下发 setAlarms([])，由原生按差量撤槽位',
+      plans.some((p) => Array.isArray(p) && p.length === 0),
+      JSON.stringify(plans)
+    )
+    check('场景 3 无 JS 报错', errors.length === 0, errors.join(' | '))
     await ctx.close()
   }
 } finally {

@@ -65,6 +65,9 @@ export function openForm(opt) {
   const delBtn = document.getElementById('btn-delete')
 
   titleEl.textContent = opt.title || '编辑'
+  // AI 模型设置会把共享按钮改成「保存并关闭」，其它表单必须显式复位，
+  // 否则从 AI 设置返回后新建待办会看到错误的按钮文案
+  document.getElementById('btn-save').textContent = opt.saveText || '保存'
   body.innerHTML = ''
   const values = Object.assign({}, opt.values || {})
   const inputs = {}

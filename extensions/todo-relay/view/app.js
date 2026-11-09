@@ -32,10 +32,10 @@
   // android-apk 条目保持一致）。宿主 iframe 没有 allow-popups，target="_blank"
   // 与 window.open() 都会被静默拦截，所以跳转一律走 api.openExternal。
   var ANDROID_DL = {
-    version: '3.7.0',
-    size: 409936,
-    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.7.0/todo-link-3.7.0.apk',
-    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.7.0',
+    version: '3.8.0',
+    size: 426467,
+    apk: 'https://github.com/Adcfimok/xhub-todo-sync/releases/download/android-v3.8.0/todo-link-3.8.0.apk',
+    notes: 'https://github.com/Adcfimok/xhub-todo-sync/releases/tag/android-v3.8.0',
   }
 
   // ---------------------------------------------------------------- 基础

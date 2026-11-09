@@ -114,7 +114,7 @@ try {
   await page.addInitScript(() => {
     window.Android = {
       originPort: () => 47830,
-      appVersion: () => '3.7.0',
+      appVersion: () => '3.8.0',
       deviceName: () => 'test',
       readClipboard: () => '',
       writeClipboard: () => {},
